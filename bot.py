@@ -1,4 +1,5 @@
 import os
+import math
 import discord
 import aiohttp
 from io import BytesIO
@@ -10,7 +11,7 @@ GUILD_ID = 1443765937793667194
 MIDDLEMAN_ROLE_ID = 1457241934832861255
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-FONT = os.path.join(BASE, "fonts", "Inter_24pt-ExtraBoldItalic.ttf")
+FONT_PATH = os.path.join(BASE, "fonts", "Inter_24pt-ExtraBoldItalic.ttf")
 
 intents = discord.Intents.default()
 intents.members = True
@@ -20,25 +21,38 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def setup_hook():
     await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
 
-def f(size: int):
+def F(size: int):
     try:
-        return ImageFont.truetype(FONT, size)
+        return ImageFont.truetype(FONT_PATH, size)
     except:
         return ImageFont.load_default()
 
-def tl(d: ImageDraw.ImageDraw, t: str, font) -> int:
+def TL(d: ImageDraw.ImageDraw, text: str, font) -> float:
     try:
-        return int(d.textlength(t, font=font))
+        return float(d.textlength(text, font=font))
     except:
-        return len(t) * 10
+        return float(len(text) * 10)
 
-def clamp_text(d: ImageDraw.ImageDraw, t: str, font, max_w: int) -> str:
-    if tl(d, t, font) <= max_w:
-        return t
-    s = t
-    while s and tl(d, s + "…", font) > max_w:
-        s = s[:-1]
-    return (s + "…") if s else "…"
+def ELLIPSIZE(d: ImageDraw.ImageDraw, text: str, font, max_w: float) -> str:
+    if TL(d, text, font) <= max_w:
+        return text
+    t = text
+    while t and TL(d, t + "…", font) > max_w:
+        t = t[:-1]
+    return (t + "…") if t else "…"
+
+def FIT(d: ImageDraw.ImageDraw, text: str, start: int, min_size: int, max_w: float):
+    s = start
+    while s >= min_size:
+        f = F(s)
+        if TL(d, text, f) <= max_w:
+            return f, text
+        s -= 2
+    f = F(min_size)
+    return f, ELLIPSIZE(d, text, f, max_w)
+
+def FIT_CENTER_X(d: ImageDraw.ImageDraw, text: str, font, center_x: int) -> int:
+    return int(center_x - TL(d, text, font) / 2)
 
 def fmt_num(n):
     try:
@@ -55,7 +69,7 @@ def fmt_num(n):
         return str(int(x))
     return f"{x:.2f}".rstrip("0").rstrip(".")
 
-def safe_team_name(name: str, fallback: str) -> str:
+def SAFE_TEAM(name: str, fallback: str) -> str:
     if not isinstance(name, str):
         return fallback
     s = name.strip()
@@ -79,12 +93,12 @@ async def fetch_avatar(session: aiohttp.ClientSession, url: str, size: int):
         im = im.resize((size, size))
     return im
 
-def draw_bg(img: Image.Image):
+def draw_bg(img):
     W, H = img.size
     d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, W, H], fill=(9, 11, 16))
+    d.rectangle([0, 0, W, H], fill=(8, 10, 15))
     for y in range(0, H, 2):
-        shade = int(14 + (y / H) * 22)
+        shade = int(12 + (y / H) * 22)
         d.line([(0, y), (W, y)], fill=(shade, shade, shade))
     step = 7
     for x in range(0, W + H, step):
@@ -141,27 +155,36 @@ async def render_wager(v) -> Image.Image:
     draw_bg(img)
     d = ImageDraw.Draw(img)
 
-    a_name = safe_team_name(v.a, "TEAM A")
-    b_name = safe_team_name(v.b, "TEAM B")
+    a_name = SAFE_TEAM(v.a, "TEAM A")
+    b_name = SAFE_TEAM(v.b, "TEAM B")
 
-    d.text((80, 54), f"WAGER {v.size}v{v.size}", fill="white", font=f(96))
-    d.text((80, 170), clamp_text(d, f"Prize: {v.prize}", f(52), W - 160), fill="#b5b9c7", font=f(52))
-    d.text((80, 234), clamp_text(d, f"Host: {v.host}", f(52), W - 160), fill="#b5b9c7", font=f(52))
+    t_font, t_text = FIT(d, f"WAGER {v.size}v{v.size}", 96, 72, W - 160)
+    d.text((80, 54), t_text, fill="white", font=t_font)
+
+    p_font, p_text = FIT(d, f"Prize: {v.prize}", 52, 34, W - 160)
+    d.text((80, 170), p_text, fill="#b5b9c7", font=p_font)
+
+    h_font, h_text = FIT(d, f"Host: {v.host}", 52, 34, W - 160)
+    d.text((80, 234), h_text, fill="#b5b9c7", font=h_font)
 
     mm = "None" if v.no_middleman else (v.middleman_name or "Pending")
-    d.text((80, 298), clamp_text(d, f"Middleman: {mm}", f(52), W - 160), fill="#b5b9c7", font=f(52))
+    m_font, m_text = FIT(d, f"Middleman: {mm}", 52, 34, W - 160)
+    d.text((80, 298), m_text, fill="#b5b9c7", font=m_font)
 
     margin = 120
     table_w = (W - margin * 3) // 2
     lx = margin
     rx = lx + table_w + margin
 
-    d.text((lx, 390), clamp_text(d, a_name, f(72), table_w), fill="#4cc2ff", font=f(72))
-    d.text((rx, 390), clamp_text(d, b_name, f(72), table_w), fill="#ffb84c", font=f(72))
+    la_font, la_text = FIT(d, a_name, 72, 46, table_w)
+    lb_font, lb_text = FIT(d, b_name, 72, 46, table_w)
+
+    d.text((lx, 390), la_text, fill="#4cc2ff", font=la_font)
+    d.text((rx, 390), lb_text, fill="#ffb84c", font=lb_font)
 
     vs = "VS"
-    vs_font = f(120)
-    d.text(((W - tl(d, vs, vs_font)) // 2, 430), vs, fill="white", font=vs_font)
+    vs_font, vs_text = FIT(d, vs, 120, 84, 260)
+    d.text((FIT_CENTER_X(d, vs_text, vs_font, W // 2), 430), vs_text, fill="white", font=vs_font)
 
     line_y = 470
     d.line([(lx, line_y), (lx + table_w, line_y)], fill=(76, 194, 255), width=5)
@@ -171,14 +194,14 @@ async def render_wager(v) -> Image.Image:
     by = 520
     avatar_size = 88
     row_h = 112
-    name_font = f(50)
 
     async with aiohttp.ClientSession() as s:
         for uid in v.team_a:
             m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
             av = await fetch_avatar(s, m.display_avatar.url, avatar_size)
             img.paste(av, (lx, ay), av)
-            d.text((lx + avatar_size + 22, ay + 18), clamp_text(d, m.display_name, name_font, table_w - avatar_size - 40), fill="white", font=name_font)
+            nf, nt = FIT(d, m.display_name, 50, 34, table_w - avatar_size - 40)
+            d.text((lx + avatar_size + 22, ay + 18), nt, fill="white", font=nf)
             ay += row_h
             if ay > H - 220:
                 break
@@ -187,18 +210,20 @@ async def render_wager(v) -> Image.Image:
             m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
             av = await fetch_avatar(s, m.display_avatar.url, avatar_size)
             img.paste(av, (rx, by), av)
-            d.text((rx + avatar_size + 22, by + 18), clamp_text(d, m.display_name, name_font, table_w - avatar_size - 40), fill="white", font=name_font)
+            nf, nt = FIT(d, m.display_name, 50, 34, table_w - avatar_size - 40)
+            d.text((rx + avatar_size + 22, by + 18), nt, fill="white", font=nf)
             by += row_h
             if by > H - 220:
                 break
 
     if not v.team_a:
-        d.text((lx, ay + 8), "No players yet", fill="#666", font=f(44))
+        d.text((lx, ay + 8), "No players yet", fill="#666", font=F(44))
     if not v.team_b:
-        d.text((rx, by + 8), "No players yet", fill="#666", font=f(44))
+        d.text((rx, by + 8), "No players yet", fill="#666", font=F(44))
 
     footer = "Brought to you by levi"
-    d.text(((W - tl(d, footer, f(26))) // 2, H - 60), footer, fill="#d0d0d0", font=f(26))
+    ff = F(26)
+    d.text((FIT_CENTER_X(d, footer, ff, W // 2), H - 60), footer, fill="#d0d0d0", font=ff)
     return img
 
 async def render_results(v) -> Image.Image:
@@ -212,20 +237,22 @@ async def render_results(v) -> Image.Image:
     lx = margin
     rx = lx + table_w + margin
 
-    a_name = safe_team_name(v.a, "TEAM A")
-    b_name = safe_team_name(v.b, "TEAM B")
+    a_name = SAFE_TEAM(v.a, "TEAM A")
+    b_name = SAFE_TEAM(v.b, "TEAM B")
 
     ta_k = sum(v.stats[u][0] for u in v.team_a if u in v.stats)
     tb_k = sum(v.stats[u][0] for u in v.team_b if u in v.stats)
 
     title, title_col = win_phrase(a_name, b_name, ta_k, tb_k)
-    title_font = f(110)
-    title = clamp_text(d, title, title_font, W - 200)
-    d.text(((W - tl(d, title, title_font)) // 2, 44), title, fill=title_col, font=title_font)
+    title_font, title_txt = FIT(d, title, 110, 64, W - 200)
+    d.text((FIT_CENTER_X(d, title_txt, title_font, W // 2), 44), title_txt, fill=title_col, font=title_font)
 
-    head_font = f(62)
-    d.text((lx, 190), clamp_text(d, f"{a_name} — {ta_k} KILLS", head_font, table_w), fill="#4cc2ff", font=head_font)
-    d.text((rx, 190), clamp_text(d, f"{b_name} — {tb_k} KILLS", head_font, table_w), fill="#ffb84c", font=head_font)
+    head_left = f"{a_name} — {ta_k} KILLS"
+    head_right = f"{b_name} — {tb_k} KILLS"
+    hl_font, hl_txt = FIT(d, head_left, 62, 40, table_w)
+    hr_font, hr_txt = FIT(d, head_right, 62, 40, table_w)
+    d.text((lx, 190), hl_txt, fill="#4cc2ff", font=hl_font)
+    d.text((rx, 190), hr_txt, fill="#ffb84c", font=hr_font)
 
     mvp_a = pick_mvp(v.stats, v.team_a)
     mvp_b = pick_mvp(v.stats, v.team_b)
@@ -236,21 +263,20 @@ async def render_results(v) -> Image.Image:
     avatar_size = 92
     row_h = 126
 
-    hdr_font = f(42)
-    row_font = f(50)
+    hdr_font = F(42)
 
     name_x = avatar_size + 26
     name_w = table_w - 520
 
-    k_edge  = table_w - 360
-    d_edge  = table_w - 220
+    k_edge = table_w - 360
+    d_edge = table_w - 220
     kd_edge = table_w - 40
 
     for bx in (lx, rx):
         d.text((bx + name_x, header_y), "NAME", fill="#b5b9c7", font=hdr_font)
-        d.text((bx + k_edge  - tl(d, "K",  hdr_font), header_y), "K",  fill="#b5b9c7", font=hdr_font)
-        d.text((bx + d_edge  - tl(d, "D",  hdr_font), header_y), "D",  fill="#b5b9c7", font=hdr_font)
-        d.text((bx + kd_edge - tl(d, "KD", hdr_font), header_y), "KD", fill="#b5b9c7", font=hdr_font)
+        d.text((bx + k_edge - TL(d, "K", hdr_font), header_y), "K", fill="#b5b9c7", font=hdr_font)
+        d.text((bx + d_edge - TL(d, "D", hdr_font), header_y), "D", fill="#b5b9c7", font=hdr_font)
+        d.text((bx + kd_edge - TL(d, "KD", hdr_font), header_y), "KD", fill="#b5b9c7", font=hdr_font)
 
     d.line([(lx, header_y + 64), (lx + table_w, header_y + 64)], fill=(76, 194, 255), width=5)
     d.line([(rx, header_y + 64), (rx + table_w, header_y + 64)], fill=(255, 184, 76), width=5)
@@ -261,6 +287,7 @@ async def render_results(v) -> Image.Image:
             for uid in team:
                 if uid not in v.stats:
                     continue
+
                 m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
                 k, dth = v.stats[uid]
                 kd_val = (k / dth) if dth else float(k)
@@ -273,25 +300,31 @@ async def render_results(v) -> Image.Image:
                 img.paste(av, (base_x, y), av)
 
                 d.rectangle([base_x + table_w - 12, y, base_x + table_w, y + avatar_size], fill=strip_col)
-                if badge:
-                    d.text((base_x + table_w - 56, y + 20), badge, fill=strip_col, font=f(48))
 
-                nm = clamp_text(d, m.display_name, row_font, name_w)
-                d.text((base_x + name_x, y + 22), nm, fill="#ffd700" if is_mvp else "white", font=row_font)
+                if badge:
+                    bfont, btxt = FIT(d, badge, 52, 40, 60)
+                    d.text((base_x + table_w - 62, y + 18), btxt, fill=strip_col, font=bfont)
+
+                nf, nt = FIT(d, m.display_name, 50, 32, name_w)
+                name_fill = "#ffd700" if is_mvp else "white"
+                d.text((base_x + name_x, y + 22), nt, fill=name_fill, font=nf)
 
                 k_txt = fmt_num(k)
                 d_txt = fmt_num(dth)
 
-                d.text((base_x + k_edge  - tl(d, k_txt,  row_font), y + 22), k_txt, fill="white", font=row_font)
-                d.text((base_x + d_edge  - tl(d, d_txt,  row_font), y + 22), d_txt, fill="white", font=row_font)
-                d.text((base_x + kd_edge - tl(d, kd_txt, row_font), y + 22), kd_txt, fill="white", font=row_font)
+                num_font = nf
+
+                d.text((base_x + k_edge - TL(d, k_txt, num_font), y + 22), k_txt, fill="white", font=num_font)
+                d.text((base_x + d_edge - TL(d, d_txt, num_font), y + 22), d_txt, fill="white", font=num_font)
+                d.text((base_x + kd_edge - TL(d, kd_txt, num_font), y + 22), kd_txt, fill="white", font=num_font)
 
                 y += row_h
                 if y > H - 160:
                     break
 
     footer = "Brought to you by levi"
-    d.text(((W - tl(d, footer, f(28))) // 2, H - 68), footer, fill="#d0d0d0", font=f(28))
+    ff = F(28)
+    d.text((FIT_CENTER_X(d, footer, ff, W // 2), H - 68), footer, fill="#d0d0d0", font=ff)
     return img
 
 class Join(discord.ui.Button):
@@ -302,6 +335,7 @@ class Join(discord.ui.Button):
     async def callback(self, i: discord.Interaction):
         v = self.view
         uid = i.user.id
+
         if self.side == "A":
             if uid in v.team_b:
                 v.team_b.remove(uid)
@@ -312,6 +346,7 @@ class Join(discord.ui.Button):
                 v.team_a.remove(uid)
             if uid not in v.team_b:
                 v.team_b.append(uid)
+
         await i.response.defer()
         await v.update()
 
@@ -371,6 +406,7 @@ class MMSelect(discord.ui.UserSelect):
         m = i.guild.get_member(picked) or await i.guild.fetch_member(picked)
         if not any(r.id == MIDDLEMAN_ROLE_ID for r in getattr(m, "roles", [])):
             return await i.response.send_message("Invalid middleman", ephemeral=True)
+
         self.v.middleman_id = m.id
         self.v.no_middleman = False
         await i.response.send_message("Middleman set", ephemeral=True)
@@ -393,13 +429,18 @@ class StatsModal(discord.ui.Modal, title="Enter Stats"):
     async def on_submit(self, i: discord.Interaction):
         if i.user.id not in {self.v.host_id, self.v.middleman_id}:
             return await i.response.send_message("Not allowed", ephemeral=True)
+
         try:
-            k = int(self.kills.value.strip())
-            dth = int(self.deaths.value.strip())
+            k = int(str(self.kills.value).strip())
+            dth = int(str(self.deaths.value).strip())
         except:
             return await i.response.send_message("Invalid numbers", ephemeral=True)
-        if k < 0: k = 0
-        if dth < 0: dth = 0
+
+        if k < 0:
+            k = 0
+        if dth < 0:
+            dth = 0
+
         self.v.stats[self.uid] = (k, dth)
         await i.response.send_message("Saved", ephemeral=True)
 
@@ -408,25 +449,37 @@ class PlayerPick(discord.ui.Select):
         self.v = v
         opts = []
         seen = set()
-        for uid in (v.team_a + v.team_b):
+
+        ids = []
+        for uid in v.team_a:
+            ids.append(uid)
+        for uid in v.team_b:
+            ids.append(uid)
+
+        for uid in ids:
             if uid in seen:
                 continue
             seen.add(uid)
             m = v.guild.get_member(uid)
             if m:
                 opts.append(discord.SelectOption(label=m.display_name, value=str(uid)))
+
         if not opts:
             opts = [discord.SelectOption(label="No players in match", value="0")]
+
         super().__init__(min_values=1, max_values=1, placeholder="Select war player", options=opts[:25])
 
     async def callback(self, i: discord.Interaction):
         if i.user.id not in {self.v.host_id, self.v.middleman_id}:
             return await i.response.send_message("Not allowed", ephemeral=True)
+
         if self.values[0] == "0":
             return await i.response.send_message("No players in match", ephemeral=True)
+
         uid = int(self.values[0])
         if uid not in self.v.team_a and uid not in self.v.team_b:
             return await i.response.send_message("Player not in match", ephemeral=True)
+
         await i.response.send_modal(StatsModal(self.v, uid))
 
 class Finalize(discord.ui.Button):
@@ -437,10 +490,12 @@ class Finalize(discord.ui.Button):
         v = self.view.v
         if i.user.id not in {v.host_id, v.middleman_id}:
             return await i.response.send_message("Not allowed", ephemeral=True)
+
         img = await render_results(v)
         buf = BytesIO()
         img.save(buf, "PNG")
         buf.seek(0)
+
         file = discord.File(buf, "results.png")
         e = discord.Embed()
         e.set_image(url="attachment://results.png")
@@ -457,22 +512,27 @@ class StatsView(discord.ui.View):
 class WagerView(discord.ui.View):
     def __init__(self, i: discord.Interaction, size: int, a: str, b: str, prize: str):
         super().__init__(timeout=None)
+
         self.guild = i.guild
         self.host_id = i.user.id
         self.host = i.user.display_name
+
         self.middleman_id = None
         self.no_middleman = False
+
         self.size = size
         self.a = a
         self.b = b
         self.prize = prize
+
         self.team_a: list[int] = []
         self.team_b: list[int] = []
         self.stats: dict[int, tuple[int, int]] = {}
+
         self.message: discord.Message | None = None
 
-        self.add_item(Join(f"Join {safe_team_name(a,'TEAM A')}", "A"))
-        self.add_item(Join(f"Join {safe_team_name(b,'TEAM B')}", "B"))
+        self.add_item(Join(f"Join {SAFE_TEAM(a, 'TEAM A')}", "A"))
+        self.add_item(Join(f"Join {SAFE_TEAM(b, 'TEAM B')}", "B"))
         self.add_item(PickMM())
         self.add_item(NoMM())
         self.add_item(End())
