@@ -1,14 +1,9 @@
-import os
-import re
-import discord
+import os, re, discord
 from discord.ext import commands
-from discord import app_commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = 1443765937793667194
-MIDDLEMAN_ROLE_ID = 1457241934832861255
 LOG_CHANNEL_ID = 1457242121009631312
-ERR = "❌ Error occurred. Contact Levi."
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -17,36 +12,16 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def setup_hook():
     await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
 
-@bot.event
-async def on_ready():
-    print(f"ONLINE as {bot.user}")
-
-@bot.tree.error
-async def on_app_command_error(interaction, error):
-    if isinstance(error, app_commands.CommandNotFound):
-        return
-    raise error
-
-async def fail(i):
-    try:
-        if not i.response.is_done():
-            await i.response.send_message(ERR, ephemeral=True)
-    except:
-        pass
-
-def _id_from_mention(s):
-    m = re.search(r"\d{15,21}", s or "")
-    return int(m.group(0)) if m else None
+def _id(m):
+    x = re.search(r"\d{15,21}", m or "")
+    return int(x.group()) if x else None
 
 def kd(k, d):
-    return round(k / d, 2) if d else float(k)
+    return round(k / d, 2) if d else k
 
-def dot(k, d):
-    return "🟢" if k > d else "🟡" if k == d else "🔴"
-
-class StatsModal(discord.ui.Modal, title="Enter Stats"):
-    kills = discord.ui.TextInput(label="Kills", required=True)
-    deaths = discord.ui.TextInput(label="Deaths", required=True)
+class StatsModal(discord.ui.Modal, title="ENTER PLAYER STATS"):
+    kills = discord.ui.TextInput(label="KILLS", required=True)
+    deaths = discord.ui.TextInput(label="DEATHS", required=True)
 
     def __init__(self, rv, uid):
         super().__init__()
@@ -54,18 +29,11 @@ class StatsModal(discord.ui.Modal, title="Enter Stats"):
         self.uid = uid
 
     async def on_submit(self, interaction):
-        if interaction.user.id not in self.rv.controllers():
-            return await fail(interaction)
-        try:
-            k = int(self.kills.value)
-            d = int(self.deaths.value)
-        except:
-            return await fail(interaction)
-        self.rv.stats[self.uid] = (k, d)
-        await interaction.response.edit_message(embed=self.rv.results_embed(), view=self.rv)
+        self.rv.stats[self.uid] = (int(self.kills.value), int(self.deaths.value))
+        await interaction.response.edit_message(embed=self.rv.embed(), view=self.rv)
 
-class NotesModal(discord.ui.Modal, title="Player Notes"):
-    notes = discord.ui.TextInput(label="Notes", style=discord.TextStyle.paragraph, required=True, max_length=800)
+class NotesModal(discord.ui.Modal, title="PLAYER NOTES"):
+    notes = discord.ui.TextInput(label="NOTES", style=discord.TextStyle.paragraph)
 
     def __init__(self, rv, uid):
         super().__init__()
@@ -73,237 +41,121 @@ class NotesModal(discord.ui.Modal, title="Player Notes"):
         self.uid = uid
 
     async def on_submit(self, interaction):
-        if interaction.user.id not in self.rv.controllers():
-            return await fail(interaction)
         self.rv.notes[self.uid] = self.notes.value
-        await interaction.response.edit_message(embed=self.rv.results_embed(), view=self.rv)
+        await interaction.response.edit_message(embed=self.rv.embed(), view=self.rv)
 
-class PlayerSelect(discord.ui.Select):
+class PlayerPick(discord.ui.Select):
     def __init__(self, rv, mode):
         self.rv = rv
         self.mode = mode
-        ids = list(dict.fromkeys(rv.wager.team_a_ids() + rv.wager.team_b_ids()))
-        options = []
-        for uid in ids:
-            m = rv.guild.get_member(uid)
-            name = m.display_name if m else "Player"
-            options.append(discord.SelectOption(label=name, value=str(uid)))
-        super().__init__(placeholder="Select player", options=options)
+        ids = list(dict.fromkeys(rv.wager.a_ids + rv.wager.b_ids))
+        opts = [
+            discord.SelectOption(
+                label=f"PLAYER {i+1}",
+                description=f"<@{uid}>",
+                value=str(uid)
+            ) for i, uid in enumerate(ids)
+        ]
+        super().__init__(placeholder="SELECT PLAYER", options=opts)
 
     async def callback(self, interaction):
-        if interaction.user.id not in self.rv.controllers():
-            return await fail(interaction)
         uid = int(self.values[0])
         if self.mode == "stats":
             await interaction.response.send_modal(StatsModal(self.rv, uid))
         else:
             await interaction.response.send_modal(NotesModal(self.rv, uid))
 
-class PlayerSelectView(discord.ui.View):
+class PickView(discord.ui.View):
     def __init__(self, rv, mode):
         super().__init__(timeout=60)
-        self.add_item(PlayerSelect(rv, mode))
+        self.add_item(PlayerPick(rv, mode))
 
 class ResultsView(discord.ui.View):
-    def __init__(self, wager, guild):
+    def __init__(self, wager):
         super().__init__(timeout=None)
         self.wager = wager
-        self.guild = guild
         self.stats = {}
         self.notes = {}
 
-    def controllers(self):
-        s = {self.wager.host_id}
-        if self.wager.middleman_id:
-            s.add(self.wager.middleman_id)
+    def block(self, uid):
+        k, d = self.stats.get(uid, (0, 0))
+        note = self.notes.get(uid)
+        s = (
+            f"👤 **<@{uid}>**\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"💥 **KILLS:** `{k}`\n"
+            f"☠️ **DEATHS:** `{d}`\n"
+            f"📊 **K/D:** `{kd(k,d)}`"
+        )
+        if note:
+            s += f"\n📝 _{note}_"
         return s
 
-    def lines(self, ids):
-        out = []
-        for uid in ids:
-            k, d = self.stats.get(uid, (0, 0))
-            n = self.notes.get(uid)
-            line = f"<@{uid}> — K:{k} D:{d} KD:{kd(k,d)} {dot(k,d)}"
-            if n:
-                line += f"\n_{n}_"
-            out.append(line)
-        return "\n".join(out) if out else "—"
+    def embed(self):
+        ta = self.wager.a_ids
+        tb = self.wager.b_ids
+        sa = sum(self.stats.get(i,(0,0))[0] for i in ta)
+        sb = sum(self.stats.get(i,(0,0))[0] for i in tb)
 
-    def results_embed(self):
-        ta = self.wager.team_a_ids()
-        tb = self.wager.team_b_ids()
-        suma = sum(self.stats.get(i, (0, 0))[0] for i in ta)
-        sumb = sum(self.stats.get(i, (0, 0))[0] for i in tb)
-        color = discord.Color.green() if suma != sumb else discord.Color.gold()
-        e = discord.Embed(title="MATCH RESULTS", color=color)
-        e.add_field(name=self.wager.a, value=self.lines(ta), inline=False)
-        e.add_field(name=self.wager.b, value=self.lines(tb), inline=False)
+        if sa > sb:
+            title = f"🏆 {self.wager.a} WINS"
+            color = discord.Color.green()
+        elif sb > sa:
+            title = f"🏆 {self.wager.b} WINS"
+            color = discord.Color.green()
+        else:
+            title = "🤝 DRAW"
+            color = discord.Color.gold()
+
+        e = discord.Embed(
+            title=title,
+            description="━━━━━━━━━━━━━━━━━━━",
+            color=color
+        )
+
+        e.add_field(
+            name=f"🔥 {self.wager.a} — {sa} KILLS",
+            value="\n\n".join(self.block(u) for u in ta) or "—",
+            inline=False
+        )
+        e.add_field(
+            name=f"🔥 {self.wager.b} — {sb} KILLS",
+            value="\n\n".join(self.block(u) for u in tb) or "—",
+            inline=False
+        )
         return e
 
-    @discord.ui.button(label="Enter Stats", style=discord.ButtonStyle.primary)
-    async def enter_stats(self, interaction, _):
-        if interaction.user.id not in self.controllers():
-            return await fail(interaction)
-        await interaction.response.send_message(view=PlayerSelectView(self, "stats"), ephemeral=True)
+    @discord.ui.button(label="ENTER STATS", style=discord.ButtonStyle.primary)
+    async def stats(self, interaction, _):
+        await interaction.response.send_message(view=PickView(self, "stats"), ephemeral=True)
 
-    @discord.ui.button(label="Add Notes", style=discord.ButtonStyle.secondary)
-    async def add_notes(self, interaction, _):
-        if interaction.user.id not in self.controllers():
-            return await fail(interaction)
-        await interaction.response.send_message(view=PlayerSelectView(self, "notes"), ephemeral=True)
+    @discord.ui.button(label="ADD NOTES", style=discord.ButtonStyle.secondary)
+    async def notes_btn(self, interaction, _):
+        await interaction.response.send_message(view=PickView(self, "notes"), ephemeral=True)
 
-    @discord.ui.button(label="Finalize", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="FINALIZE", style=discord.ButtonStyle.success)
     async def finalize(self, interaction, _):
-        if interaction.user.id not in self.controllers():
-            return await fail(interaction)
-        log = bot.get_channel(LOG_CHANNEL_ID)
-        if log:
-            await log.send(embed=self.results_embed())
-        await interaction.response.edit_message(content="✅ Logged", view=None)
-
-class BeginView(discord.ui.View):
-    def __init__(self, wager, users):
-        super().__init__(timeout=None)
-        self.wager = wager
-        self.users = set(users)
-        self.ready = set()
-
-    @discord.ui.button(label="Begin", style=discord.ButtonStyle.success)
-    async def begin(self, interaction, _):
-        if interaction.user.id not in self.users:
-            return await fail(interaction)
-        self.ready.add(interaction.user.id)
-        if self.ready == self.users:
-            self.wager.status = "⚔️ IN PROGRESS"
-            msg = await interaction.channel.fetch_message(self.wager.msg_id)
-            await msg.edit(embed=self.wager.embed(), view=self.wager)
-            await interaction.message.edit(content="Match started", view=None)
-        else:
-            await interaction.response.send_message("Ready", ephemeral=True)
-
-class MiddlemanAcceptView(discord.ui.View):
-    def __init__(self, wager, uid):
-        super().__init__(timeout=120)
-        self.wager = wager
-        self.uid = uid
-
-    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success)
-    async def accept(self, interaction, _):
-        if interaction.user.id != self.uid:
-            return await fail(interaction)
-        self.wager.middleman_id = self.uid
-        await self.wager.try_start(interaction.channel)
-        await interaction.response.edit_message(content="Middleman accepted", view=None)
-
-class MiddlemanPick(discord.ui.UserSelect):
-    def __init__(self, wager):
-        super().__init__(min_values=1, max_values=1)
-        self.wager = wager
-
-    async def callback(self, interaction):
-        if interaction.user.id != self.wager.host_id:
-            return await fail(interaction)
-        m = interaction.guild.get_member(self.values[0].id)
-        if not m or not any(r.id == MIDDLEMAN_ROLE_ID for r in m.roles):
-            return await interaction.response.send_message("Invalid middleman", ephemeral=True)
-        await interaction.response.send_message(view=MiddlemanAcceptView(self.wager, m.id), ephemeral=False)
-
-class MiddlemanView(discord.ui.View):
-    def __init__(self, wager):
-        super().__init__(timeout=60)
-        self.add_item(MiddlemanPick(wager))
+        ch = bot.get_channel(LOG_CHANNEL_ID)
+        if ch:
+            await ch.send(embed=self.embed())
+        await interaction.response.edit_message(content="✅ RESULT LOGGED", view=None)
 
 class WagerView(discord.ui.View):
-    def __init__(self, host_id, size, a, b, prize, time, rules, guild):
+    def __init__(self, a, b):
         super().__init__(timeout=None)
-        self.host_id = host_id
-        self.middleman_id = None
-        self.no_middleman = False
-        self.size = size
         self.a = a
         self.b = b
-        self.prize = prize
-        self.time = time
-        self.rules = rules
-        self.team_a = []
-        self.team_b = []
-        self.status = "🟢 OPEN"
-        self.msg_id = None
-        self.begin_sent = False
-        self.guild = guild
+        self.a_ids = []
+        self.b_ids = []
 
-    def team_a_ids(self):
-        return [_id_from_mention(m) for m in self.team_a if _id_from_mention(m)]
-
-    def team_b_ids(self):
-        return [_id_from_mention(m) for m in self.team_b if _id_from_mention(m)]
-
-    def embed(self):
-        e = discord.Embed(title="WAGER", color=discord.Color.blurple())
-        e.add_field(name="Host", value=f"<@{self.host_id}>")
-        e.add_field(name="Middleman", value=f"<@{self.middleman_id}>" if self.middleman_id else "—")
-        e.add_field(name=self.a, value="\n".join(self.team_a) or "—")
-        e.add_field(name=self.b, value="\n".join(self.team_b) or "—")
-        e.add_field(name="Prize", value=self.prize, inline=False)
-        e.add_field(name="Rules", value=self.rules, inline=False)
-        e.add_field(name="Status", value=self.status, inline=False)
-        return e
-
-    async def try_start(self, channel):
-        if self.begin_sent:
-            return
-        if len(self.team_a) == self.size and len(self.team_b) == self.size:
-            if self.middleman_id or self.no_middleman:
-                self.begin_sent = True
-                users = set(self.team_a_ids() + self.team_b_ids())
-                await channel.send("Teams ready", view=BeginView(self, users))
-
-    @discord.ui.button(label="Join A")
-    async def join_a(self, interaction, _):
-        m = interaction.user.mention
-        if m in self.team_b:
-            self.team_b.remove(m)
-        if m not in self.team_a and len(self.team_a) < self.size:
-            self.team_a.append(m)
-        await interaction.response.edit_message(embed=self.embed(), view=self)
-        await self.try_start(interaction.channel)
-
-    @discord.ui.button(label="Join B")
-    async def join_b(self, interaction, _):
-        m = interaction.user.mention
-        if m in self.team_a:
-            self.team_a.remove(m)
-        if m not in self.team_b and len(self.team_b) < self.size:
-            self.team_b.append(m)
-        await interaction.response.edit_message(embed=self.embed(), view=self)
-        await self.try_start(interaction.channel)
-
-    @discord.ui.button(label="Middleman")
-    async def mm(self, interaction, _):
-        if interaction.user.id != self.host_id:
-            return await fail(interaction)
-        await interaction.response.send_message(view=MiddlemanView(self), ephemeral=True)
-
-    @discord.ui.button(label="No Middleman")
-    async def no_mm(self, interaction, _):
-        if interaction.user.id != self.host_id:
-            return await fail(interaction)
-        self.no_middleman = True
-        await interaction.response.edit_message(embed=self.embed(), view=self)
-        await self.try_start(interaction.channel)
-
-    @discord.ui.button(label="End", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="END MATCH", style=discord.ButtonStyle.danger)
     async def end(self, interaction, _):
-        if interaction.user.id not in {self.host_id, self.middleman_id}:
-            return await fail(interaction)
-        rv = ResultsView(self, interaction.guild)
-        await interaction.response.edit_message(embed=rv.results_embed(), view=rv)
+        rv = ResultsView(self)
+        await interaction.response.edit_message(embed=rv.embed(), view=rv)
 
 @bot.tree.command(name="wager", guild=discord.Object(id=GUILD_ID))
-async def wager(interaction, team_size: int, team_a_name: str, team_b_name: str, prize: str, start_time: str, rules: str):
-    v = WagerView(interaction.user.id, team_size, team_a_name, team_b_name, prize, start_time, rules, interaction.guild)
-    await interaction.response.send_message(embed=v.embed(), view=v)
-    msg = await interaction.original_response()
-    v.msg_id = msg.id
+async def wager(interaction, team_a: str, team_b: str):
+    v = WagerView(team_a, team_b)
+    await interaction.response.send_message("MATCH STARTED", view=v)
 
 bot.run(TOKEN)
