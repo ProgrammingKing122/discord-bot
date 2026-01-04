@@ -1,10 +1,11 @@
 import os
 import discord
-from discord import app_commands
 from discord.ext import commands
+from discord import app_commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = 1443765937793667194
+MIDDLEMAN_ROLE_ID = 1457241934832861255
 ERR = '❌ **Error has happened — please contact "Levi" for fixes.**'
 
 intents = discord.Intents.default()
@@ -23,6 +24,26 @@ async def fail(i):
         await i.followup.send(ERR, ephemeral=True)
     else:
         await i.response.send_message(ERR, ephemeral=True)
+
+class BeginView(discord.ui.View):
+    def __init__(self, wager, users):
+        super().__init__(timeout=None)
+        self.wager = wager
+        self.users = set(users)
+        self.ready = set()
+
+    @discord.ui.button(label="React to Begin", style=discord.ButtonStyle.success, emoji="⚔️")
+    async def begin(self, interaction, _):
+        if interaction.user.id not in self.users:
+            return await fail(interaction)
+        self.ready.add(interaction.user.id)
+        if self.ready == self.users:
+            self.wager.status = "⚔️ IN PROGRESS"
+            msg = await interaction.channel.fetch_message(self.wager.msg_id)
+            await msg.edit(embed=self.wager.embed(), view=self.wager)
+            await interaction.message.edit(content="⚔️ **Wager started!**", view=None)
+        else:
+            await interaction.response.send_message("Ready ✔", ephemeral=True)
 
 class EndModal(discord.ui.Modal, title="End Wager"):
     winner = discord.ui.TextInput(label="Winner (Team A / Team B)", required=True)
@@ -52,8 +73,7 @@ class MiddlemanAcceptView(discord.ui.View):
             return await fail(interaction)
         self.wager.middleman_id = self.user_id
         await interaction.message.delete()
-        msg = await interaction.channel.fetch_message(self.wager.msg_id)
-        await msg.edit(embed=self.wager.embed(), view=self.wager)
+        await self.wager.try_start(interaction.channel)
 
 class MiddlemanPick(discord.ui.UserSelect):
     def __init__(self, wager):
@@ -63,10 +83,17 @@ class MiddlemanPick(discord.ui.UserSelect):
     async def callback(self, interaction):
         if interaction.user.id != self.wager.host_id:
             return await fail(interaction)
-        target = self.values[0]
+
+        member = interaction.guild.get_member(self.values[0].id)
+        if not member or not any(r.id == MIDDLEMAN_ROLE_ID for r in member.roles):
+            return await interaction.response.send_message(
+                "❌ That user does not have the Middleman role.",
+                ephemeral=True
+            )
+
         await interaction.response.send_message(
-            f"<@{target.id}> you were selected as **Middleman**.",
-            view=MiddlemanAcceptView(self.wager, target.id)
+            f"<@{member.id}> you were selected as **Middleman**.",
+            view=MiddlemanAcceptView(self.wager, member.id)
         )
 
 class MiddlemanView(discord.ui.View):
@@ -90,6 +117,7 @@ class WagerView(discord.ui.View):
         self.status = "🟢 OPEN"
         self.result = None
         self.msg_id = None
+        self.begin_sent = False
 
     def controllers(self):
         s = {self.host_id}
@@ -121,6 +149,20 @@ class WagerView(discord.ui.View):
         else:
             await interaction.response.edit_message(embed=self.embed(), view=self)
 
+    async def try_start(self, channel):
+        if self.begin_sent:
+            return
+        if len(self.team_a) == self.size and len(self.team_b) == self.size:
+            self.begin_sent = True
+            users = {int(m[2:-1]) for m in self.team_a + self.team_b}
+            mentions = " ".join(self.team_a + self.team_b)
+            msg = await channel.fetch_message(self.msg_id)
+            await msg.edit(embed=self.embed(), view=self)
+            await channel.send(
+                f"{mentions}\n⚔️ **Teams are full. React to begin.**",
+                view=BeginView(self, users)
+            )
+
     @discord.ui.button(label="Join Team A", style=discord.ButtonStyle.primary)
     async def join_a(self, interaction, _):
         u = interaction.user.mention
@@ -129,6 +171,8 @@ class WagerView(discord.ui.View):
         if u not in self.team_a and len(self.team_a) < self.size:
             self.team_a.append(u)
         await self.redraw(interaction)
+        if not self.middleman_id:
+            await self.try_start(interaction.channel)
 
     @discord.ui.button(label="Join Team B", style=discord.ButtonStyle.primary)
     async def join_b(self, interaction, _):
@@ -138,6 +182,8 @@ class WagerView(discord.ui.View):
         if u not in self.team_b and len(self.team_b) < self.size:
             self.team_b.append(u)
         await self.redraw(interaction)
+        if not self.middleman_id:
+            await self.try_start(interaction.channel)
 
     @discord.ui.button(label="Middleman", style=discord.ButtonStyle.secondary, emoji="🧑‍⚖️")
     async def mm(self, interaction, _):
