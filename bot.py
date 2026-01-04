@@ -1,14 +1,14 @@
 import os
 import re
 import discord
+import requests
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 from discord.ext import commands
-from discord import app_commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-
 GUILD_ID = 1443765937793667194
 MIDDLEMAN_ROLE_ID = 1457241934832861255
-LOG_CHANNEL_ID = 1457242121009631312
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -17,242 +17,143 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def setup_hook():
     await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
 
-@bot.event
-async def on_ready():
-    print(f"ONLINE as {bot.user}")
-
-def uid_from_mention(s: str):
+def uid_from_mention(s):
     m = re.search(r"\d{15,21}", s or "")
     return int(m.group(0)) if m else None
 
-def kd(k: int, d: int):
-    return round(k / d, 2) if d else k
+def fetch_avatar(url, size=128):
+    r = requests.get(url)
+    img = Image.open(BytesIO(r.content)).convert("RGBA")
+    return img.resize((size, size))
 
-async def fail(i: discord.Interaction):
-    if not i.response.is_done():
-        await i.response.send_message("❌ Error", ephemeral=True)
+def render_wager_image(view):
+    W, H = 1600, 900
+    img = Image.new("RGB", (W, H), "#0f1115")
+    d = ImageDraw.Draw(img)
 
-class StatsModal(discord.ui.Modal, title="Enter Player Stats"):
-    kills = discord.ui.TextInput(label="Kills", required=True)
-    deaths = discord.ui.TextInput(label="Deaths", required=True)
+    title = ImageFont.truetype("arial.ttf", 64)
+    body = ImageFont.truetype("arial.ttf", 36)
+    small = ImageFont.truetype("arial.ttf", 28)
 
-    def __init__(self, rv, uid: int):
-        super().__init__()
-        self.rv = rv
-        self.uid = uid
+    d.text((60, 40), f"WAGER — {view.size}v{view.size}", font=title, fill="white")
+    d.text((60, 120), f"Prize: {view.prize}", font=body, fill="#aab")
+    d.text((60, 170), f"Host: @{view.host_name}", font=body, fill="#aab")
 
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            k = int(self.kills.value)
-            d = int(self.deaths.value)
-            if k < 0 or d < 0:
-                return await fail(interaction)
-        except:
-            return await fail(interaction)
+    if view.middleman_id:
+        d.text((60, 220), f"Middleman: @{view.middleman_name}", font=body, fill="#aab")
+    else:
+        d.text((60, 220), "Middleman: None", font=body, fill="#aab")
 
-        self.rv.stats[self.uid] = (k, d)
-        await interaction.response.edit_message(embed=self.rv.results_embed(), view=self.rv)
+    col_y = 320
+    d.text((200, col_y - 60), view.a, font=title, fill="#6cf")
+    d.text((1000, col_y - 60), view.b, font=title, fill="#fc6")
 
-class PlayerSelect(discord.ui.Select):
-    def __init__(self, rv):
-        self.rv = rv
-        ids = list(dict.fromkeys(rv.wager.team_a_ids() + rv.wager.team_b_ids()))
-        opts = []
-        for uid in ids:
-            m = rv.guild.get_member(uid) if rv.guild else None
-            label = (m.display_name if m else f"Player {uid}")[:100]
-            opts.append(discord.SelectOption(label=label, value=str(uid)))
-        super().__init__(placeholder="Select player", min_values=1, max_values=1, options=opts)
+    ay = col_y
+    by = col_y
 
-    async def callback(self, interaction: discord.Interaction):
-        uid = int(self.values[0])
-        await interaction.response.send_modal(StatsModal(self.rv, uid))
+    for uid in view.team_a_ids():
+        m = view.guild.get_member(uid)
+        if not m:
+            continue
+        av = fetch_avatar(m.display_avatar.url)
+        img.paste(av, (120, ay), av)
+        d.text((280, ay + 40), m.display_name, font=body, fill="white")
+        ay += 160
 
-class PlayerSelectView(discord.ui.View):
-    def __init__(self, rv):
-        super().__init__(timeout=60)
-        self.add_item(PlayerSelect(rv))
+    for uid in view.team_b_ids():
+        m = view.guild.get_member(uid)
+        if not m:
+            continue
+        av = fetch_avatar(m.display_avatar.url)
+        img.paste(av, (920, by), av)
+        d.text((1080, by + 40), m.display_name, font=body, fill="white")
+        by += 160
 
-class ResultsView(discord.ui.View):
-    def __init__(self, wager, guild: discord.Guild):
-        super().__init__(timeout=None)
-        self.wager = wager
-        self.guild = guild
-        self.stats = {}
-
-    def controllers(self):
-        s = {self.wager.host_id}
-        if self.wager.middleman_id:
-            s.add(self.wager.middleman_id)
-        return s
-
-    def player_block(self, uid: int):
-        k, d = self.stats.get(uid, (0, 0))
-        return (
-            f"👤 <@{uid}>\n"
-            f"💥 Kills: **{k}**\n"
-            f"☠️ Deaths: **{d}**\n"
-            f"📊 KD: **{kd(k,d)}**"
-        )
-
-    def results_embed(self):
-        ta = self.wager.team_a_ids()
-        tb = self.wager.team_b_ids()
-        sa = sum(self.stats.get(i,(0,0))[0] for i in ta)
-        sb = sum(self.stats.get(i,(0,0))[0] for i in tb)
-
-        if sa > sb:
-            title = f"🏆 {self.wager.a} WINS"
-            color = discord.Color.green()
-        elif sb > sa:
-            title = f"🏆 {self.wager.b} WINS"
-            color = discord.Color.green()
-        else:
-            title = "🤝 DRAW"
-            color = discord.Color.gold()
-
-        e = discord.Embed(title=title, color=color)
-        e.add_field(name=f"{self.wager.a} — {sa} Kills", value="\n\n".join(self.player_block(u) for u in ta) or "—", inline=False)
-        e.add_field(name=f"{self.wager.b} — {sb} Kills", value="\n\n".join(self.player_block(u) for u in tb) or "—", inline=False)
-        return e
-
-    @discord.ui.button(label="Enter Stats", style=discord.ButtonStyle.primary)
-    async def enter_stats(self, interaction: discord.Interaction, _):
-        if interaction.user.id not in self.controllers():
-            return await fail(interaction)
-        await interaction.response.send_message(view=PlayerSelectView(self), ephemeral=True)
-
-    @discord.ui.button(label="Finalize", style=discord.ButtonStyle.success)
-    async def finalize(self, interaction: discord.Interaction, _):
-        if interaction.user.id not in self.controllers():
-            return await fail(interaction)
-        log = bot.get_channel(LOG_CHANNEL_ID)
-        if log:
-            await log.send(embed=self.results_embed())
-        await interaction.response.edit_message(embed=self.results_embed(), view=None)
-
-class MiddlemanPick(discord.ui.UserSelect):
-    def __init__(self, wager):
-        super().__init__(min_values=1, max_values=1)
-        self.wager = wager
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.wager.host_id:
-            return await fail(interaction)
-        member = interaction.guild.get_member(self.values[0].id)
-        if not member or not any(r.id == MIDDLEMAN_ROLE_ID for r in member.roles):
-            return await interaction.response.send_message("❌ User lacks Middleman role.", ephemeral=True)
-        self.wager.middleman_id = member.id
-        self.wager.no_middleman = False
-        await interaction.response.edit_message(embed=self.wager.embed(), view=self.wager)
-
-class MiddlemanView(discord.ui.View):
-    def __init__(self, wager):
-        super().__init__(timeout=60)
-        self.add_item(MiddlemanPick(wager))
+    return img
 
 class JoinButton(discord.ui.Button):
-    def __init__(self, label: str, which: str):
+    def __init__(self, label, side):
         super().__init__(label=label, style=discord.ButtonStyle.primary)
-        self.which = which
+        self.side = side
 
-    async def callback(self, interaction: discord.Interaction):
-        view: "WagerView" = self.view
+    async def callback(self, interaction):
+        v = self.view
         u = interaction.user.mention
 
-        if self.which == "A":
-            if u in view.team_b:
-                view.team_b.remove(u)
-            if u not in view.team_a and len(view.team_a) < view.size:
-                view.team_a.append(u)
+        if self.side == "A":
+            if u in v.team_b:
+                v.team_b.remove(u)
+            if u not in v.team_a:
+                v.team_a.append(u)
         else:
-            if u in view.team_a:
-                view.team_a.remove(u)
-            if u not in view.team_b and len(view.team_b) < view.size:
-                view.team_b.append(u)
+            if u in v.team_a:
+                v.team_a.remove(u)
+            if u not in v.team_b:
+                v.team_b.append(u)
 
-        await interaction.response.edit_message(embed=view.embed(), view=view)
-        await view.try_start(interaction.channel)
+        await v.update_message(interaction)
 
 class MiddlemanButton(discord.ui.Button):
     def __init__(self):
         super().__init__(label="Pick Middleman", style=discord.ButtonStyle.secondary)
 
-    async def callback(self, interaction: discord.Interaction):
-        view: "WagerView" = self.view
-        if interaction.user.id != view.host_id:
-            return await fail(interaction)
-        await interaction.response.send_message("Select middleman:", view=MiddlemanView(view), ephemeral=True)
+    async def callback(self, interaction):
+        v = self.view
+        if interaction.user.id != v.host_id:
+            return
+        await interaction.response.send_message(
+            view=MiddlemanSelectView(v),
+            ephemeral=True
+        )
 
-class NoMiddlemanButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="No Middleman", style=discord.ButtonStyle.secondary)
-
-    async def callback(self, interaction: discord.Interaction):
-        view: "WagerView" = self.view
-        if interaction.user.id != view.host_id:
-            return await fail(interaction)
-        view.no_middleman = True
-        view.middleman_id = None
-        await interaction.response.edit_message(embed=view.embed(), view=view)
-        await view.try_start(interaction.channel)
-
-class EndMatchButton(discord.ui.Button):
+class EndButton(discord.ui.Button):
     def __init__(self):
         super().__init__(label="End Match", style=discord.ButtonStyle.danger)
 
-    async def callback(self, interaction: discord.Interaction):
-        view: "WagerView" = self.view
-        if interaction.user.id not in {view.host_id, view.middleman_id}:
-            return await fail(interaction)
-        rv = ResultsView(view, interaction.guild)
-        await interaction.response.edit_message(embed=rv.results_embed(), view=rv)
+    async def callback(self, interaction):
+        await interaction.response.send_message("Match ended.", ephemeral=True)
 
-class BeginView(discord.ui.View):
-    def __init__(self, wager, users):
-        super().__init__(timeout=None)
-        self.wager = wager
-        self.users = set(users)
-        self.ready = set()
+class MiddlemanSelect(discord.ui.UserSelect):
+    def __init__(self, view):
+        super().__init__(min_values=1, max_values=1)
+        self.view = view
 
-    @discord.ui.button(label="Begin", style=discord.ButtonStyle.success, emoji="⚔️")
-    async def begin(self, interaction: discord.Interaction, _):
-        if interaction.user.id not in self.users:
-            return await fail(interaction)
-        self.ready.add(interaction.user.id)
-        if self.ready == self.users:
-            self.wager.status = "⚔️ IN PROGRESS"
-            msg = await interaction.channel.fetch_message(self.wager.msg_id)
-            await msg.edit(embed=self.wager.embed(), view=self.wager)
-            await interaction.response.send_message("⚔️ Match started", ephemeral=True)
-        else:
-            await interaction.response.send_message("Ready", ephemeral=True)
+    async def callback(self, interaction):
+        m = interaction.guild.get_member(self.values[0].id)
+        if not m or not any(r.id == MIDDLEMAN_ROLE_ID for r in m.roles):
+            return await interaction.response.send_message("Invalid middleman", ephemeral=True)
+        self.view.middleman_id = m.id
+        await interaction.response.send_message("Middleman set", ephemeral=True)
+
+class MiddlemanSelectView(discord.ui.View):
+    def __init__(self, view):
+        super().__init__(timeout=60)
+        self.add_item(MiddlemanSelect(view))
 
 class WagerView(discord.ui.View):
-    def __init__(self, host_id, size, a, b, prize, time, rules, guild):
+    def __init__(self, interaction, size, a, b, prize):
         super().__init__(timeout=None)
-        self.host_id = host_id
-        self.size = max(1, min(int(size), 8))
-        self.a = str(a)[:40]
-        self.b = str(b)[:40]
-        self.prize = str(prize)[:1800]
-        self.time = str(time)[:80]
-        self.rules = str(rules)[:1200]
-        self.guild = guild
-
-        self.middleman_id = None
-        self.no_middleman = False
+        self.host_id = interaction.user.id
+        self.host_name = interaction.user.display_name
+        self.guild = interaction.guild
+        self.size = size
+        self.a = a
+        self.b = b
+        self.prize = prize
         self.team_a = []
         self.team_b = []
-        self.status = "🟢 OPEN"
-        self.msg_id = None
-        self.begin_sent = False
+        self.middleman_id = None
+        self.message = None
 
-        self.add_item(JoinButton(f"Join {self.a}", "A"))
-        self.add_item(JoinButton(f"Join {self.b}", "B"))
+        self.add_item(JoinButton(f"Join {a}", "A"))
+        self.add_item(JoinButton(f"Join {b}", "B"))
         self.add_item(MiddlemanButton())
-        self.add_item(NoMiddlemanButton())
-        self.add_item(EndMatchButton())
+        self.add_item(EndButton())
+
+    @property
+    def middleman_name(self):
+        m = self.guild.get_member(self.middleman_id)
+        return m.display_name if m else ""
 
     def team_a_ids(self):
         return [uid_from_mention(m) for m in self.team_a if uid_from_mention(m)]
@@ -260,67 +161,29 @@ class WagerView(discord.ui.View):
     def team_b_ids(self):
         return [uid_from_mention(m) for m in self.team_b if uid_from_mention(m)]
 
-    def team_list(self, team):
-        if not team:
-            return "—"
-        lines = []
-        for m in team:
-            uid = uid_from_mention(m)
-            if uid:
-                lines.append(f"• <@{uid}>")
-        return "\n".join(lines) or "—"
+    async def update_message(self, interaction):
+        img = render_wager_image(self)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
 
-    def embed(self):
-        e = discord.Embed(
-            title="💎 WAGER",
-            description=f"**Match:** {self.size}v{self.size} • **Start:** {self.time}\n**Prize:** {self.prize}",
-            color=discord.Color.blurple()
-        )
+        file = discord.File(buf, filename="wager.png")
 
-        e.add_field(name="Host", value=f"<@{self.host_id}>", inline=True)
-        mm = "🚫 None" if self.no_middleman else (f"<@{self.middleman_id}>" if self.middleman_id else "—")
-        e.add_field(name="Middleman", value=mm, inline=True)
-        e.add_field(name="Status", value=self.status, inline=True)
-
-        e.add_field(name=self.a, value=self.team_list(self.team_a), inline=True)
-        e.add_field(name=self.b, value=self.team_list(self.team_b), inline=True)
-        e.add_field(name="\u200b", value="\u200b", inline=True)
-
-        e.add_field(name="Rules", value=self.rules or "—", inline=False)
-        return e
-
-    async def try_start(self, channel: discord.abc.Messageable):
-        if self.begin_sent:
-            return
-        if len(self.team_a) == self.size and len(self.team_b) == self.size:
-            if self.middleman_id or self.no_middleman:
-                self.begin_sent = True
-                users = set(self.team_a_ids() + self.team_b_ids())
-                mentions = " ".join([f"<@{u}>" for u in users])
-                await channel.send(f"{mentions}\n⚔️ Teams full. Click Begin.", view=BeginView(self, users))
+        if interaction.response.is_done():
+            await self.message.edit(attachments=[file], view=self)
+        else:
+            await interaction.response.edit_message(attachments=[file], view=self)
 
 @bot.tree.command(name="wager", guild=discord.Object(id=GUILD_ID))
-async def wager(
-    interaction: discord.Interaction,
-    team_size: int,
-    team_a_name: str,
-    team_b_name: str,
-    prize: str,
-    start_time: str,
-    rules: str
-):
-    view = WagerView(
-        interaction.user.id,
-        team_size,
-        team_a_name,
-        team_b_name,
-        prize,
-        start_time,
-        rules,
-        interaction.guild
-    )
-    await interaction.response.send_message(embed=view.embed(), view=view)
-    msg = await interaction.original_response()
-    view.msg_id = msg.id
+async def wager(interaction: discord.Interaction, team_size: int, team_a: str, team_b: str, prize: str):
+    view = WagerView(interaction, team_size, team_a, team_b, prize)
+    img = render_wager_image(view)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+
+    file = discord.File(buf, filename="wager.png")
+    await interaction.response.send_message(file=file, view=view)
+    view.message = await interaction.original_response()
 
 bot.run(TOKEN)
