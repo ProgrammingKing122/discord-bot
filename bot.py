@@ -26,23 +26,31 @@ def f(size):
     except:
         return ImageFont.load_default()
 
-async def avatar(session, url, s=72):
+async def avatar(session, url, s=64):
     async with session.get(url) as r:
         return Image.open(BytesIO(await r.read())).convert("RGBA").resize((s, s))
 
-def status_icon(k, d):
-    if k == 0 and d >= 2:
-        return "☠", "#ff4c4c"
+def status_strip(k, d, mvp=False):
+    if mvp:
+        return "#ffd700", "👑"
+    if k == 0 and d >= 1:
+        return "#ff4c4c", "☠"
     if k > d:
-        return "/", "#4cff7a"
+        return "#4cff7a", ""
     if k == d:
-        return "/", "#ffd24c"
-    return "/", "#ff4c4c"
+        return "#ffd24c", ""
+    return "#ff4c4c", ""
 
 async def render_wager(v):
-    img = Image.new("RGB", (1280, 720), "#0b0d12")
-    d = ImageDraw.Draw(img)
+    img = Image.new("RGB", (1280, 720), "#07090d")
+    bg = ImageDraw.Draw(img)
+    for i in range(0, 720, 2):
+        shade = int(18 + i * 0.025)
+        bg.line([(0, i), (1280, i)], fill=(shade, shade, shade))
+    for i in range(0, 1280, 6):
+        bg.line([(i, 0), (i - 720, 720)], fill=(12, 12, 18))
 
+    d = ImageDraw.Draw(img)
     d.text((40, 30), f"WAGER {v.size}v{v.size}", fill="white", font=f(64))
     d.text((40, 120), f"Prize: {v.prize}", fill="#b5b9c7", font=f(36))
     d.text((40, 165), f"Host: {v.host}", fill="#b5b9c7", font=f(36))
@@ -57,123 +65,141 @@ async def render_wager(v):
 
     async with aiohttp.ClientSession() as s:
         for uid in v.team_a:
-            m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
+            m = v.guild.get_member(uid)
+            if not m:
+                continue
             av = await avatar(s, m.display_avatar.url)
             img.paste(av, (120, ay), av)
-            d.text((240, ay + 20), m.display_name, fill="white", font=f(32))
-            ay += 100
+            d.text((240, ay + 18), m.display_name, fill="white", font=f(32))
+            ay += 90
 
         for uid in v.team_b:
-            m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
+            m = v.guild.get_member(uid)
+            if not m:
+                continue
             av = await avatar(s, m.display_avatar.url)
             img.paste(av, (780, by), av)
-            d.text((900, by + 20), m.display_name, fill="white", font=f(32))
-            by += 100
-
-    if not v.team_a:
-        d.text((160, ay), "No players yet", fill="#555", font=f(32))
-    if not v.team_b:
-        d.text((820, by), "No players yet", fill="#555", font=f(32))
+            d.text((900, by + 18), m.display_name, fill="white", font=f(32))
+            by += 90
 
     return img
 
 async def render_results(v):
-    img = Image.new("RGB", (1280, 720), "#0b0d12")
-    d = ImageDraw.Draw(img)
+    img = Image.new("RGB", (1280, 720), "#07090d")
+    bg = ImageDraw.Draw(img)
+    for i in range(0, 720, 2):
+        shade = int(18 + i * 0.025)
+        bg.line([(0, i), (1280, i)], fill=(shade, shade, shade))
+    for i in range(0, 1280, 6):
+        bg.line([(i, 0), (i - 720, 720)], fill=(12, 12, 18))
 
-    d.text((40, 30), "MATCH RESULTS", fill="white", font=f(64))
+    d = ImageDraw.Draw(img)
 
     ta_k = sum(v.stats[u][0] for u in v.team_a if u in v.stats)
     tb_k = sum(v.stats[u][0] for u in v.team_b if u in v.stats)
+    diff = abs(ta_k - tb_k)
 
-    winner = v.a if ta_k > tb_k else v.b if tb_k > ta_k else "DRAW"
-    d.text((460, 110), f"{winner} WINS", fill="#4cff7a", font=f(48))
+    if ta_k == tb_k:
+        win_text = "DRAW"
+        win_col = "#ffd24c"
+    else:
+        w = v.a if ta_k > tb_k else v.b
+        l = v.b if ta_k > tb_k else v.a
+        if diff >= 15:
+            win_text = f"{w} DESTROYED {l}"
+            win_col = "#ff4c4c"
+        elif diff >= 10:
+            win_text = f"{w} SLAMMED {l}"
+            win_col = "#ff6a4c"
+        elif diff >= 6:
+            win_text = f"{w} DOMINATED {l}"
+            win_col = "#ff9c4c"
+        elif diff >= 3:
+            win_text = f"{w} DEFEATED {l}"
+            win_col = "#ffd24c"
+        else:
+            win_text = f"{w} WINS NARROWLY"
+            win_col = "#4cff7a"
 
-    d.text((100, 180), f"{v.a} — {ta_k} KILLS", fill="#4cc2ff", font=f(40))
-    d.text((760, 180), f"{v.b} — {tb_k} KILLS", fill="#ffb84c", font=f(40))
+    d.text((460, 40), win_text, fill=win_col, font=f(52))
+    d.text((100, 120), f"{v.a} — {ta_k} KILLS", fill="#4cc2ff", font=f(36))
+    d.text((760, 120), f"{v.b} — {tb_k} KILLS", fill="#ffb84c", font=f(36))
 
     def mvp(team):
-        best_uid = None
-        best_score = None
+        best = None
         for u in team:
             if u not in v.stats:
                 continue
-            k, dt = v.stats[u]
-            kd = (k / dt) if dt else float(k)
+            k, dth = v.stats[u]
+            kd = k / dth if dth else k
             score = (k, kd)
-            if best_score is None or score > best_score:
-                best_score = score
-                best_uid = u
-        return best_uid
+            if not best or score > best[1]:
+                best = (u, score)
+        return best[0] if best else None
 
     mvp_a = mvp(v.team_a)
     mvp_b = mvp(v.team_b)
 
-    lx = 70
-    rx = 690
-    header_y = 220
-    row_y_a = 255
-    row_y_b = 255
+    lx, rx = 80, 700
+    hy = 180
+    ry_a = ry_b = 220
 
-    def draw_headers(x, name_color):
-        d.text((x + 90, header_y), "NAME", fill="#b5b9c7", font=f(22))
-        d.text((x + 360, header_y), "K", fill="#b5b9c7", font=f(22))
-        d.text((x + 420, header_y), "D", fill="#b5b9c7", font=f(22))
-        d.text((x + 480, header_y), "KD", fill="#b5b9c7", font=f(22))
-        d.text((x + 560, header_y), " ", fill="#b5b9c7", font=f(22))
-        d.rectangle([x, header_y + 35, x + 560, header_y + 37], fill=name_color)
+    d.text((lx + 90, hy), "NAME", fill="#b5b9c7", font=f(22))
+    d.text((lx + 360, hy), "K", fill="#b5b9c7", font=f(22))
+    d.text((lx + 420, hy), "D", fill="#b5b9c7", font=f(22))
+    d.text((lx + 480, hy), "KD", fill="#b5b9c7", font=f(22))
 
-    draw_headers(lx, "#4cc2ff")
-    draw_headers(rx, "#ffb84c")
+    d.text((rx + 90, hy), "NAME", fill="#b5b9c7", font=f(22))
+    d.text((rx + 360, hy), "K", fill="#b5b9c7", font=f(22))
+    d.text((rx + 420, hy), "D", fill="#b5b9c7", font=f(22))
+    d.text((rx + 480, hy), "KD", fill="#b5b9c7", font=f(22))
 
     async with aiohttp.ClientSession() as s:
         for uid in v.team_a:
             if uid not in v.stats:
                 continue
-            m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
+            m = v.guild.get_member(uid)
+            if not m:
+                continue
             k, dth = v.stats[uid]
             kd = round((k / dth), 2) if dth else round(float(k), 2)
-            icon, col = status_icon(k, dth)
+            is_mvp = uid == mvp_a
+            strip_col, badge = status_strip(k, dth, is_mvp)
 
-            is_mvp = (uid == mvp_a)
-            name_col = "#ffd700" if is_mvp else "white"
-            badge = "👑" if is_mvp else icon
-            badge_col = "#ffd700" if is_mvp else col
+            av = await avatar(s, m.display_avatar.url)
+            img.paste(av, (lx, ry_a), av)
+            d.rectangle([lx + 560, ry_a, lx + 570, ry_a + 64], fill=strip_col)
+            if badge:
+                d.text((lx + 578, ry_a + 16), badge, fill=strip_col, font=f(28))
 
-            av = await avatar(s, m.display_avatar.url, 64)
-            img.paste(av, (lx, row_y_a), av)
-
-            d.text((lx + 85, row_y_a + 10), m.display_name, fill=name_col, font=f(28))
-            d.text((lx + 360, row_y_a + 10), str(k), fill="white", font=f(28))
-            d.text((lx + 420, row_y_a + 10), str(dth), fill="white", font=f(28))
-            d.text((lx + 480, row_y_a + 10), str(kd), fill="white", font=f(28))
-            d.text((lx + 545, row_y_a + 6), badge, fill=badge_col, font=f(34))
-
-            row_y_a += 78
+            d.text((lx + 85, ry_a + 14), m.display_name, fill="#ffd700" if is_mvp else "white", font=f(28))
+            d.text((lx + 360, ry_a + 14), str(k), fill="white", font=f(28))
+            d.text((lx + 420, ry_a + 14), str(dth), fill="white", font=f(28))
+            d.text((lx + 480, ry_a + 14), str(kd), fill="white", font=f(28))
+            ry_a += 74
 
         for uid in v.team_b:
             if uid not in v.stats:
                 continue
-            m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
+            m = v.guild.get_member(uid)
+            if not m:
+                continue
             k, dth = v.stats[uid]
             kd = round((k / dth), 2) if dth else round(float(k), 2)
-            icon, col = status_icon(k, dth)
+            is_mvp = uid == mvp_b
+            strip_col, badge = status_strip(k, dth, is_mvp)
 
-            is_mvp = (uid == mvp_b)
-            name_col = "#ffd700" if is_mvp else "white"
-            badge = "👑" if is_mvp else icon
-            badge_col = "#ffd700" if is_mvp else col
+            av = await avatar(s, m.display_avatar.url)
+            img.paste(av, (rx, ry_b), av)
+            d.rectangle([rx + 560, ry_b, rx + 570, ry_b + 64], fill=strip_col)
+            if badge:
+                d.text((rx + 578, ry_b + 16), badge, fill=strip_col, font=f(28))
 
-            av = await avatar(s, m.display_avatar.url, 64)
-            img.paste(av, (rx, row_y_b), av)
-
-            d.text((rx + 85, row_y_b + 10), m.display_name, fill=name_col, font=f(28))
-            d.text((rx + 360, row_y_b + 10), str(k), fill="white", font=f(28))
-            d.text((rx + 420, row_y_b + 10), str(dth), fill="white", font=f(28))
-            d.text((rx + 480, row_y_b + 10), str(kd), fill="white", font=f(28))
-            d.text((rx + 545, row_y_b + 6), badge, fill=badge_col, font=f(34))
-
-            row_y_b += 78
+            d.text((rx + 85, ry_b + 14), m.display_name, fill="#ffd700" if is_mvp else "white", font=f(28))
+            d.text((rx + 360, ry_b + 14), str(k), fill="white", font=f(28))
+            d.text((rx + 420, ry_b + 14), str(dth), fill="white", font=f(28))
+            d.text((rx + 480, ry_b + 14), str(kd), fill="white", font=f(28))
+            ry_b += 74
 
     return img
 
@@ -273,35 +299,23 @@ class StatsModal(discord.ui.Modal, title="Enter Stats"):
     async def on_submit(self, i):
         if i.user.id not in {self.v.host_id, self.v.middleman_id}:
             return await i.response.send_message("Not allowed", ephemeral=True)
-        try:
-            k = int(self.kills.value)
-            d = int(self.deaths.value)
-        except:
-            return await i.response.send_message("Invalid numbers", ephemeral=True)
-        self.v.stats[self.uid] = (k, d)
+        self.v.stats[self.uid] = (int(self.kills.value), int(self.deaths.value))
         await i.response.send_message("Saved", ephemeral=True)
 
 class PlayerPick(discord.ui.Select):
     def __init__(self, v):
         self.v = v
         opts = []
-        seen = set()
-        for uid in (v.team_a + v.team_b):
-            if uid in seen:
-                continue
-            seen.add(uid)
+        for uid in dict.fromkeys(v.team_a + v.team_b):
             m = v.guild.get_member(uid)
             if m:
                 opts.append(discord.SelectOption(label=m.display_name, value=str(uid)))
-        super().__init__(min_values=1, max_values=1, placeholder="Select war player", options=opts[:25])
+        super().__init__(placeholder="Select war player", min_values=1, max_values=1, options=opts[:25])
 
     async def callback(self, i):
         if i.user.id not in {self.v.host_id, self.v.middleman_id}:
             return await i.response.send_message("Not allowed", ephemeral=True)
-        uid = int(self.values[0])
-        if uid not in self.v.team_a and uid not in self.v.team_b:
-            return await i.response.send_message("Player not in match", ephemeral=True)
-        await i.response.send_modal(StatsModal(self.v, uid))
+        await i.response.send_modal(StatsModal(self.v, int(self.values[0])))
 
 class Finalize(discord.ui.Button):
     def __init__(self):
