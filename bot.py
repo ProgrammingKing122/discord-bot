@@ -2,6 +2,7 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
+from datetime import datetime
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = 1443765937793667194
@@ -17,70 +18,78 @@ async def setup_hook():
 async def on_ready():
     print(f"ONLINE as {bot.user}")
 
-class RulesModal(discord.ui.Modal, title="Edit Wager Rules"):
-    rules = discord.ui.TextInput(label="Rules", style=discord.TextStyle.paragraph, required=True)
+class BeginView(discord.ui.View):
+    def __init__(self, mentions):
+        super().__init__(timeout=None)
+        self.mentions = mentions
+        self.ready = set()
 
-    def __init__(self, view):
-        super().__init__()
-        self.view = view
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if interaction.user.id != self.view.host_id:
-            await interaction.response.send_message("Only the host can edit rules.", ephemeral=True)
+    @discord.ui.button(label="React to Begin", style=discord.ButtonStyle.success, emoji="⚔️")
+    async def begin(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in self.mentions:
+            await interaction.response.send_message("You are not part of this wager.", ephemeral=True)
             return
-        self.view.rules = self.rules.value
-        embed = interaction.message.embeds[0]
-        embed.set_field_at(
-            self.view.rules_index,
-            name="Rules",
-            value=self.view.rules,
-            inline=False
-        )
-        await interaction.response.edit_message(embed=embed, view=self.view)
+        self.ready.add(interaction.user.id)
+        if self.ready == self.mentions:
+            await interaction.message.edit(content="⚔️ **Wager started!**", view=None)
+        else:
+            await interaction.response.send_message("Ready ✔", ephemeral=True)
 
 class WagerView(discord.ui.View):
-    def __init__(self, host_id, rules):
+    def __init__(self, host_id, team_size, team_a_name, team_b_name, start_time):
         super().__init__(timeout=None)
         self.host_id = host_id
+        self.team_size = team_size
+        self.team_a_name = team_a_name
+        self.team_b_name = team_b_name
         self.team_a = []
         self.team_b = []
-        self.rules = rules
-        self.rules_index = 4
+        self.start_time = start_time
+        self.started = False
 
-    def teams(self):
+    def render_teams(self):
         return (
             "\n".join(self.team_a) if self.team_a else "—",
             "\n".join(self.team_b) if self.team_b else "—"
         )
 
-    async def refresh(self, interaction):
+    async def update(self, interaction):
         embed = interaction.message.embeds[0]
-        a, b = self.teams()
-        embed.set_field_at(2, name="Team A", value=a, inline=True)
-        embed.set_field_at(3, name="Team B", value=b, inline=True)
+        a, b = self.render_teams()
+        embed.set_field_at(3, name=self.team_a_name, value=a, inline=True)
+        embed.set_field_at(4, name=self.team_b_name, value=b, inline=True)
         await interaction.response.edit_message(embed=embed, view=self)
+        await self.check_full(interaction)
+
+    async def check_full(self, interaction):
+        if self.started:
+            return
+        if len(self.team_a) == self.team_size and len(self.team_b) == self.team_size:
+            self.started = True
+            users = {int(u.strip("<@>")) for u in self.team_a + self.team_b}
+            mentions = " ".join(self.team_a + self.team_b)
+            await interaction.followup.send(
+                f"{mentions}\n⚔️ **Teams are full!**\nReact to begin.",
+                view=BeginView(users)
+            )
 
     @discord.ui.button(label="Join Team A", style=discord.ButtonStyle.primary)
     async def join_a(self, interaction: discord.Interaction, button: discord.ui.Button):
         user = interaction.user.mention
         if user in self.team_b:
             self.team_b.remove(user)
-        if user not in self.team_a:
+        if user not in self.team_a and len(self.team_a) < self.team_size:
             self.team_a.append(user)
-        await self.refresh(interaction)
+        await self.update(interaction)
 
     @discord.ui.button(label="Join Team B", style=discord.ButtonStyle.primary)
     async def join_b(self, interaction: discord.Interaction, button: discord.ui.Button):
         user = interaction.user.mention
         if user in self.team_a:
             self.team_a.remove(user)
-        if user not in self.team_b:
+        if user not in self.team_b and len(self.team_b) < self.team_size:
             self.team_b.append(user)
-        await self.refresh(interaction)
-
-    @discord.ui.button(label="Rules", style=discord.ButtonStyle.secondary, emoji="📜")
-    async def rules_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RulesModal(self))
+        await self.update(interaction)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -98,29 +107,39 @@ class WagerView(discord.ui.View):
     guild=discord.Object(id=GUILD_ID)
 )
 @app_commands.describe(
-    match_size="e.g. 3v3",
+    team_size="Players per team (e.g. 1 for 1v1, 2 for 2v2)",
+    team_a_name="Team or clan name for Team A",
+    team_b_name="Team or clan name for Team B",
     prize="What is being wagered",
-    rules="Wager rules"
+    start_time="Start time (e.g. 18:30)"
 )
 async def wager(
     interaction: discord.Interaction,
-    match_size: str,
+    team_size: int,
+    team_a_name: str,
+    team_b_name: str,
     prize: str,
-    rules: str
+    start_time: str
 ):
     embed = discord.Embed(
         title="💎 Wager",
         color=discord.Color.blurple()
     )
     embed.add_field(name="Host", value=interaction.user.mention, inline=False)
-    embed.add_field(name="Match", value=match_size, inline=True)
-    embed.add_field(name="Team A", value="—", inline=True)
-    embed.add_field(name="Team B", value="—", inline=True)
-    embed.add_field(name="Rules", value=rules, inline=False)
+    embed.add_field(name="Match", value=f"{team_size}v{team_size}", inline=True)
+    embed.add_field(name="Start Time", value=start_time, inline=True)
+    embed.add_field(name=team_a_name, value="—", inline=True)
+    embed.add_field(name=team_b_name, value="—", inline=True)
     embed.add_field(name="Prize", value=prize, inline=False)
     embed.add_field(name="Status", value="🟢 OPEN", inline=False)
 
-    view = WagerView(interaction.user.id, rules)
+    view = WagerView(
+        interaction.user.id,
+        team_size,
+        team_a_name,
+        team_b_name,
+        start_time
+    )
 
     await interaction.response.send_message(
         embed=embed,
