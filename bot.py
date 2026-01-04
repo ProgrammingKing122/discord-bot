@@ -21,30 +21,28 @@ def uid_from_mention(s):
     m = re.search(r"\d{15,21}", s or "")
     return int(m.group(0)) if m else None
 
-async def fetch_avatar(session, url, size=128):
+async def fetch_avatar(session, url, size=160):
     async with session.get(url) as r:
         data = await r.read()
-    img = Image.open(BytesIO(data)).convert("RGBA")
-    return img.resize((size, size))
+    return Image.open(BytesIO(data)).convert("RGBA").resize((size, size))
 
 async def render_wager_image(view):
-    W, H = 1600, 900
-    img = Image.new("RGB", (W, H), "#0f1115")
+    W, H = 1920, 1080
+    img = Image.new("RGB", (W, H), "#0b0d12")
     d = ImageDraw.Draw(img)
+    font_big = ImageFont.load_default()
+    font = ImageFont.load_default()
 
-    title = ImageFont.load_default()
-    body = ImageFont.load_default()
+    d.text((80, 60), f"WAGER — {view.size}v{view.size}", fill="white", font=font_big)
+    d.text((80, 120), f"Prize: {view.prize}", fill="#aab", font=font)
+    d.text((80, 160), f"Host: {view.host_name}", fill="#aab", font=font)
+    d.text((80, 200), f"Middleman: {view.middleman_name or 'None'}", fill="#aab", font=font)
 
-    d.text((60, 40), f"WAGER — {view.size}v{view.size}", fill="white", font=title)
-    d.text((60, 100), f"Prize: {view.prize}", fill="#aab", font=body)
-    d.text((60, 140), f"Host: {view.host_name}", fill="#aab", font=body)
-    d.text((60, 180), f"Middleman: {view.middleman_name or 'None'}", fill="#aab", font=body)
+    d.text((300, 300), view.a, fill="#4cc2ff", font=font_big)
+    d.text((1200, 300), view.b, fill="#ffb84c", font=font_big)
 
-    d.text((200, 260), view.a, fill="#6cf", font=title)
-    d.text((1000, 260), view.b, fill="#fc6", font=title)
-
-    ay = 320
-    by = 320
+    ay = 380
+    by = 380
 
     async with aiohttp.ClientSession() as session:
         for uid in view.team_a_ids():
@@ -52,18 +50,18 @@ async def render_wager_image(view):
             if not m:
                 continue
             av = await fetch_avatar(session, m.display_avatar.url)
-            img.paste(av, (120, ay), av)
-            d.text((280, ay + 40), m.display_name, fill="white", font=body)
-            ay += 160
+            img.paste(av, (220, ay), av)
+            d.text((420, ay + 60), m.display_name, fill="white", font=font)
+            ay += 200
 
         for uid in view.team_b_ids():
             m = view.guild.get_member(uid)
             if not m:
                 continue
             av = await fetch_avatar(session, m.display_avatar.url)
-            img.paste(av, (920, by), av)
-            d.text((1080, by + 40), m.display_name, fill="white", font=body)
-            by += 160
+            img.paste(av, (1120, by), av)
+            d.text((1320, by + 60), m.display_name, fill="white", font=font)
+            by += 200
 
     return img
 
@@ -87,17 +85,16 @@ class JoinButton(discord.ui.Button):
             if u not in v.team_b:
                 v.team_b.append(u)
 
-        await v.update_message(interaction)
+        await v.update(interaction)
 
 class MiddlemanButton(discord.ui.Button):
     def __init__(self):
         super().__init__(label="Pick Middleman", style=discord.ButtonStyle.secondary)
 
     async def callback(self, interaction):
-        v = self.view
-        if interaction.user.id != v.host_id:
+        if interaction.user.id != self.view.host_id:
             return
-        await interaction.response.send_message(view=MiddlemanSelectView(v), ephemeral=True)
+        await interaction.response.send_message(view=MiddlemanSelectView(self.view), ephemeral=True)
 
 class EndButton(discord.ui.Button):
     def __init__(self):
@@ -116,7 +113,7 @@ class MiddlemanSelect(discord.ui.UserSelect):
         if not m or not any(r.id == MIDDLEMAN_ROLE_ID for r in m.roles):
             return await interaction.response.send_message("Invalid middleman", ephemeral=True)
         self.view.middleman_id = m.id
-        await interaction.response.send_message("Middleman set", ephemeral=True)
+        await self.view.update(interaction)
 
 class MiddlemanSelectView(discord.ui.View):
     def __init__(self, view):
@@ -126,9 +123,9 @@ class MiddlemanSelectView(discord.ui.View):
 class WagerView(discord.ui.View):
     def __init__(self, interaction, size, a, b, prize):
         super().__init__(timeout=None)
+        self.guild = interaction.guild
         self.host_id = interaction.user.id
         self.host_name = interaction.user.display_name
-        self.guild = interaction.guild
         self.size = size
         self.a = a
         self.b = b
@@ -154,17 +151,20 @@ class WagerView(discord.ui.View):
     def team_b_ids(self):
         return [uid_from_mention(m) for m in self.team_b if uid_from_mention(m)]
 
-    async def update_message(self, interaction):
+    async def update(self, interaction):
         img = await render_wager_image(self)
         buf = BytesIO()
         img.save(buf, format="PNG")
         buf.seek(0)
+
         file = discord.File(buf, filename="wager.png")
+        embed = discord.Embed()
+        embed.set_image(url="attachment://wager.png")
 
         if interaction.response.is_done():
-            await self.message.edit(attachments=[file], view=self)
+            await self.message.edit(embed=embed, attachments=[file], view=self)
         else:
-            await interaction.response.edit_message(attachments=[file], view=self)
+            await interaction.response.edit_message(embed=embed, attachments=[file], view=self)
 
 @bot.tree.command(name="wager", guild=discord.Object(id=GUILD_ID))
 async def wager(interaction: discord.Interaction, team_size: int, team_a: str, team_b: str, prize: str):
@@ -173,8 +173,12 @@ async def wager(interaction: discord.Interaction, team_size: int, team_a: str, t
     buf = BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
+
     file = discord.File(buf, filename="wager.png")
-    await interaction.response.send_message(file=file, view=view)
+    embed = discord.Embed()
+    embed.set_image(url="attachment://wager.png")
+
+    await interaction.response.send_message(embed=embed, file=file, view=view)
     view.message = await interaction.original_response()
 
 bot.run(TOKEN)
