@@ -11,7 +11,7 @@ GUILD_ID = 1443765937793667194
 MIDDLEMAN_ROLE_ID = 1457241934832861255
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FONT_PATH = os.path.join(BASE_DIR, "fonts", "Inter-Bold.ttf")
+FONT_PATH = os.path.join(BASE_DIR, "fonts", "Inter_24pt-ExtraBoldItalic.ttf")
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -24,25 +24,25 @@ def uid_from_mention(s):
     m = re.search(r"\d{15,21}", s or "")
     return int(m.group(0)) if m else None
 
-def load_font(size):
+def font(size):
     try:
         return ImageFont.truetype(FONT_PATH, size)
     except Exception:
         return ImageFont.load_default()
 
-async def fetch_avatar(session, url, size=128):
+async def fetch_avatar(session, url, size=120):
     async with session.get(url) as r:
         data = await r.read()
     return Image.open(BytesIO(data)).convert("RGBA").resize((size, size))
 
-async def render_wager_image(view):
+async def render_image(view):
     W, H = 1280, 720
     img = Image.new("RGB", (W, H), "#0b0d12")
     d = ImageDraw.Draw(img)
 
-    title = load_font(64)
-    header = load_font(48)
-    body = load_font(36)
+    title = font(64)
+    header = font(48)
+    body = font(36)
 
     d.text((40, 30), f"WAGER {view.size}v{view.size}", fill="white", font=title)
     d.text((40, 110), f"Prize: {view.prize}", fill="#b5b9c7", font=body)
@@ -62,7 +62,7 @@ async def render_wager_image(view):
                 continue
             av = await fetch_avatar(session, m.display_avatar.url)
             img.paste(av, (120, ay), av)
-            d.text((280, ay + 40), m.display_name, fill="white", font=body)
+            d.text((270, ay + 40), m.display_name, fill="white", font=body)
             ay += 150
 
         for uid in view.team_b_ids():
@@ -71,7 +71,7 @@ async def render_wager_image(view):
                 continue
             av = await fetch_avatar(session, m.display_avatar.url)
             img.paste(av, (780, by), av)
-            d.text((940, by + 40), m.display_name, fill="white", font=body)
+            d.text((930, by + 40), m.display_name, fill="white", font=body)
             by += 150
 
     if not view.team_a:
@@ -111,7 +111,10 @@ class MiddlemanButton(discord.ui.Button):
     async def callback(self, interaction):
         if interaction.user.id != self.view.host_id:
             return
-        await interaction.response.send_message(view=MiddlemanSelectView(self.view), ephemeral=True)
+        await interaction.response.send_message(
+            view=MiddlemanSelectView(self.view),
+            ephemeral=True
+        )
 
 class EndButton(discord.ui.Button):
     def __init__(self):
@@ -169,7 +172,7 @@ class WagerView(discord.ui.View):
         return [uid_from_mention(m) for m in self.team_b if uid_from_mention(m)]
 
     async def update(self):
-        img = await render_wager_image(self)
+        img = await render_image(self)
         buf = BytesIO()
         img.save(buf, format="PNG")
         buf.seek(0)
@@ -183,7 +186,7 @@ class WagerView(discord.ui.View):
 @bot.tree.command(name="wager", guild=discord.Object(id=GUILD_ID))
 async def wager(interaction, team_size: int, team_a: str, team_b: str, prize: str):
     view = WagerView(interaction, team_size, team_a, team_b, prize)
-    img = await render_wager_image(view)
+    img = await render_image(view)
     buf = BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
