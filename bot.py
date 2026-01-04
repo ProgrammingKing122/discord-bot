@@ -1,6 +1,4 @@
 import os
-import re
-import math
 import discord
 import aiohttp
 from io import BytesIO
@@ -28,19 +26,19 @@ def f(size: int):
     except:
         return ImageFont.load_default()
 
-def tl(d: ImageDraw.ImageDraw, text: str, font) -> int:
+def tl(d: ImageDraw.ImageDraw, t: str, font) -> int:
     try:
-        return int(d.textlength(text, font=font))
+        return int(d.textlength(t, font=font))
     except:
-        return len(text) * 10
+        return len(t) * 10
 
-def clamp_text(d: ImageDraw.ImageDraw, text: str, font, max_w: int) -> str:
-    if tl(d, text, font) <= max_w:
-        return text
-    t = text
-    while t and tl(d, t + "…", font) > max_w:
-        t = t[:-1]
-    return (t + "…") if t else "…"
+def clamp_text(d: ImageDraw.ImageDraw, t: str, font, max_w: int) -> str:
+    if tl(d, t, font) <= max_w:
+        return t
+    s = t
+    while s and tl(d, s + "…", font) > max_w:
+        s = s[:-1]
+    return (s + "…") if s else "…"
 
 def fmt_num(n):
     try:
@@ -58,9 +56,11 @@ def fmt_num(n):
     return f"{x:.2f}".rstrip("0").rstrip(".")
 
 def safe_team_name(name: str, fallback: str) -> str:
-    if not isinstance(name, str) or not name.strip():
+    if not isinstance(name, str):
         return fallback
     s = name.strip()
+    if not s:
+        return fallback
     lowered = s.lower()
     banned = [
         "nigger", "nigga", "faggot", "fag", "kike", "retard", "tranny",
@@ -71,7 +71,7 @@ def safe_team_name(name: str, fallback: str) -> str:
             return fallback
     return s
 
-async def fetch_avatar(session: aiohttp.ClientSession, url: str, size: int = 88) -> Image.Image:
+async def fetch_avatar(session: aiohttp.ClientSession, url: str, size: int):
     async with session.get(url) as r:
         b = await r.read()
     im = Image.open(BytesIO(b)).convert("RGBA")
@@ -82,10 +82,9 @@ async def fetch_avatar(session: aiohttp.ClientSession, url: str, size: int = 88)
 def draw_bg(img: Image.Image):
     W, H = img.size
     d = ImageDraw.Draw(img)
-    base = (9, 11, 16)
-    d.rectangle([0, 0, W, H], fill=base)
+    d.rectangle([0, 0, W, H], fill=(9, 11, 16))
     for y in range(0, H, 2):
-        shade = int(12 + (y / H) * 18)
+        shade = int(14 + (y / H) * 22)
         d.line([(0, y), (W, y)], fill=(shade, shade, shade))
     step = 7
     for x in range(0, W + H, step):
@@ -110,7 +109,7 @@ def win_phrase(a_name: str, b_name: str, a_k: int, b_k: int):
         return f"{w} DEFEATED {l}", "#ffd24c"
     return f"{w} WINS NARROWLY", "#4cff7a"
 
-def pick_mvp(stats: dict, team: list[int]) -> int | None:
+def pick_mvp(stats: dict[int, tuple[int, int]], team: list[int]) -> int | None:
     rows = []
     for uid in team:
         if uid not in stats:
@@ -142,72 +141,64 @@ async def render_wager(v) -> Image.Image:
     draw_bg(img)
     d = ImageDraw.Draw(img)
 
-    title_font = f(96)
-    sub_font = f(52)
-    meta_font = f(44)
-    name_font = f(46)
-
     a_name = safe_team_name(v.a, "TEAM A")
     b_name = safe_team_name(v.b, "TEAM B")
 
-    title = f"WAGER {v.size}v{v.size}"
-    d.text((80, 54), title, fill="white", font=title_font)
-
-    d.text((80, 170), clamp_text(d, f"Prize: {v.prize}", sub_font, W - 160), fill="#b5b9c7", font=sub_font)
-    d.text((80, 234), clamp_text(d, f"Host: {v.host}", sub_font, W - 160), fill="#b5b9c7", font=sub_font)
+    d.text((80, 54), f"WAGER {v.size}v{v.size}", fill="white", font=f(96))
+    d.text((80, 170), clamp_text(d, f"Prize: {v.prize}", f(52), W - 160), fill="#b5b9c7", font=f(52))
+    d.text((80, 234), clamp_text(d, f"Host: {v.host}", f(52), W - 160), fill="#b5b9c7", font=f(52))
 
     mm = "None" if v.no_middleman else (v.middleman_name or "Pending")
-    d.text((80, 298), clamp_text(d, f"Middleman: {mm}", sub_font, W - 160), fill="#b5b9c7", font=sub_font)
+    d.text((80, 298), clamp_text(d, f"Middleman: {mm}", f(52), W - 160), fill="#b5b9c7", font=f(52))
 
-    table_margin = 120
-    table_w = (W - table_margin * 3) // 2
-    lx = table_margin
-    rx = lx + table_w + table_margin
+    margin = 120
+    table_w = (W - margin * 3) // 2
+    lx = margin
+    rx = lx + table_w + margin
 
     d.text((lx, 390), clamp_text(d, a_name, f(72), table_w), fill="#4cc2ff", font=f(72))
     d.text((rx, 390), clamp_text(d, b_name, f(72), table_w), fill="#ffb84c", font=f(72))
 
     vs = "VS"
     vs_font = f(120)
-    vs_x = (W - tl(d, vs, vs_font)) // 2
-    d.text((vs_x, 430), vs, fill="white", font=vs_font)
+    d.text(((W - tl(d, vs, vs_font)) // 2, 430), vs, fill="white", font=vs_font)
 
     line_y = 470
     d.line([(lx, line_y), (lx + table_w, line_y)], fill=(76, 194, 255), width=5)
     d.line([(rx, line_y), (rx + table_w, line_y)], fill=(255, 184, 76), width=5)
 
-    left_y = 520
-    right_y = 520
+    ay = 520
+    by = 520
     avatar_size = 88
     row_h = 112
+    name_font = f(50)
 
     async with aiohttp.ClientSession() as s:
         for uid in v.team_a:
             m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
             av = await fetch_avatar(s, m.display_avatar.url, avatar_size)
-            img.paste(av, (lx, left_y), av)
-            d.text((lx + avatar_size + 22, left_y + 18), clamp_text(d, m.display_name, name_font, table_w - avatar_size - 40), fill="white", font=name_font)
-            left_y += row_h
-            if left_y > H - 220:
+            img.paste(av, (lx, ay), av)
+            d.text((lx + avatar_size + 22, ay + 18), clamp_text(d, m.display_name, name_font, table_w - avatar_size - 40), fill="white", font=name_font)
+            ay += row_h
+            if ay > H - 220:
                 break
 
         for uid in v.team_b:
             m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
             av = await fetch_avatar(s, m.display_avatar.url, avatar_size)
-            img.paste(av, (rx, right_y), av)
-            d.text((rx + avatar_size + 22, right_y + 18), clamp_text(d, m.display_name, name_font, table_w - avatar_size - 40), fill="white", font=name_font)
-            right_y += row_h
-            if right_y > H - 220:
+            img.paste(av, (rx, by), av)
+            d.text((rx + avatar_size + 22, by + 18), clamp_text(d, m.display_name, name_font, table_w - avatar_size - 40), fill="white", font=name_font)
+            by += row_h
+            if by > H - 220:
                 break
 
     if not v.team_a:
-        d.text((lx, left_y + 8), "No players yet", fill="#666", font=meta_font)
+        d.text((lx, ay + 8), "No players yet", fill="#666", font=f(44))
     if not v.team_b:
-        d.text((rx, right_y + 8), "No players yet", fill="#666", font=meta_font)
+        d.text((rx, by + 8), "No players yet", fill="#666", font=f(44))
 
     footer = "Brought to you by levi"
     d.text(((W - tl(d, footer, f(26))) // 2, H - 60), footer, fill="#d0d0d0", font=f(26))
-
     return img
 
 async def render_results(v) -> Image.Image:
@@ -246,21 +237,20 @@ async def render_results(v) -> Image.Image:
     row_h = 126
 
     hdr_font = f(42)
-    row_font = f(48)
+    row_font = f(50)
 
     name_x = avatar_size + 26
-    name_w = table_w - (name_x + 360)
+    name_w = table_w - 520
 
-    k_w, d_w, kd_w = 130, 130, 180
-    k_x = table_w - (k_w + d_w + kd_w)
-    d_x = table_w - (d_w + kd_w)
-    kd_x = table_w - kd_w
+    k_edge  = table_w - 360
+    d_edge  = table_w - 220
+    kd_edge = table_w - 40
 
     for bx in (lx, rx):
         d.text((bx + name_x, header_y), "NAME", fill="#b5b9c7", font=hdr_font)
-        d.text((bx + k_x, header_y), "K", fill="#b5b9c7", font=hdr_font)
-        d.text((bx + d_x, header_y), "D", fill="#b5b9c7", font=hdr_font)
-        d.text((bx + kd_x + kd_w - tl(d, "KD", hdr_font), header_y), "KD", fill="#b5b9c7", font=hdr_font)
+        d.text((bx + k_edge  - tl(d, "K",  hdr_font), header_y), "K",  fill="#b5b9c7", font=hdr_font)
+        d.text((bx + d_edge  - tl(d, "D",  hdr_font), header_y), "D",  fill="#b5b9c7", font=hdr_font)
+        d.text((bx + kd_edge - tl(d, "KD", hdr_font), header_y), "KD", fill="#b5b9c7", font=hdr_font)
 
     d.line([(lx, header_y + 64), (lx + table_w, header_y + 64)], fill=(76, 194, 255), width=5)
     d.line([(rx, header_y + 64), (rx + table_w, header_y + 64)], fill=(255, 184, 76), width=5)
@@ -284,7 +274,7 @@ async def render_results(v) -> Image.Image:
 
                 d.rectangle([base_x + table_w - 12, y, base_x + table_w, y + avatar_size], fill=strip_col)
                 if badge:
-                    d.text((base_x + table_w - 54, y + 22), badge, fill=strip_col, font=f(44))
+                    d.text((base_x + table_w - 56, y + 20), badge, fill=strip_col, font=f(48))
 
                 nm = clamp_text(d, m.display_name, row_font, name_w)
                 d.text((base_x + name_x, y + 22), nm, fill="#ffd700" if is_mvp else "white", font=row_font)
@@ -292,9 +282,9 @@ async def render_results(v) -> Image.Image:
                 k_txt = fmt_num(k)
                 d_txt = fmt_num(dth)
 
-                d.text((base_x + k_x + k_w - tl(d, k_txt, row_font), y + 22), k_txt, fill="white", font=row_font)
-                d.text((base_x + d_x + d_w - tl(d, d_txt, row_font), y + 22), d_txt, fill="white", font=row_font)
-                d.text((base_x + kd_x + kd_w - tl(d, kd_txt, row_font), y + 22), kd_txt, fill="white", font=row_font)
+                d.text((base_x + k_edge  - tl(d, k_txt,  row_font), y + 22), k_txt, fill="white", font=row_font)
+                d.text((base_x + d_edge  - tl(d, d_txt,  row_font), y + 22), d_txt, fill="white", font=row_font)
+                d.text((base_x + kd_edge - tl(d, kd_txt, row_font), y + 22), kd_txt, fill="white", font=row_font)
 
                 y += row_h
                 if y > H - 160:
