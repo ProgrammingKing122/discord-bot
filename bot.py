@@ -30,9 +30,26 @@ def clamp(draw, text, font, w):
     if draw.textlength(text, font=font) <= w:
         return text
     t = text
-    while len(t) > 0 and draw.textlength(t + "…", font=font) > w:
+    while t and draw.textlength(t + "…", font=font) > w:
         t = t[:-1]
     return (t + "…") if t else "…"
+
+def fmt_num(n):
+    try:
+        n = float(n)
+    except:
+        return str(n)
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    if n >= 10_000:
+        return f"{n/1_000:.1f}K"
+    if n.is_integer():
+        return str(int(n))
+    return f"{n:.2f}".rstrip("0").rstrip(".")
+
+async def avatar(session, url, s=72):
+    async with session.get(url) as r:
+        return Image.open(BytesIO(await r.read())).convert("RGBA").resize((s, s))
 
 def bg(img):
     W, H = img.size
@@ -42,10 +59,6 @@ def bg(img):
         d.line([(0, y), (W, y)], fill=(shade, shade, shade))
     for x in range(0, W, 6):
         d.line([(x, 0), (x - H, H)], fill=(10, 10, 16))
-
-async def avatar(session, url, s=72):
-    async with session.get(url) as r:
-        return Image.open(BytesIO(await r.read())).convert("RGBA").resize((s, s))
 
 def status_strip(k, dth, mvp):
     if k == 0 and dth >= 1:
@@ -157,19 +170,25 @@ async def render_results(v):
     row_start = header_y + 52
 
     name_x = 90
-    k_x = table_w - 210
-    d_x = table_w - 140
-    kd_x = table_w - 40
+    name_w = table_w - 320
+
+    k_w = 80
+    d_w = 80
+    kd_w = 90
+
+    k_x = table_w - (k_w + d_w + kd_w)
+    d_x = table_w - (d_w + kd_w)
+    kd_x = table_w - kd_w
 
     d.text((lx + name_x, header_y), "NAME", fill="#b5b9c7", font=f(26))
     d.text((lx + k_x, header_y), "K", fill="#b5b9c7", font=f(26))
     d.text((lx + d_x, header_y), "D", fill="#b5b9c7", font=f(26))
-    d.text((lx + kd_x - 30, header_y), "KD", fill="#b5b9c7", font=f(26))
+    d.text((lx + kd_x + kd_w - 26, header_y), "KD", fill="#b5b9c7", font=f(26))
 
     d.text((rx + name_x, header_y), "NAME", fill="#b5b9c7", font=f(26))
     d.text((rx + k_x, header_y), "K", fill="#b5b9c7", font=f(26))
     d.text((rx + d_x, header_y), "D", fill="#b5b9c7", font=f(26))
-    d.text((rx + kd_x - 30, header_y), "KD", fill="#b5b9c7", font=f(26))
+    d.text((rx + kd_x + kd_w - 26, header_y), "KD", fill="#b5b9c7", font=f(26))
 
     async with aiohttp.ClientSession() as s:
         for base_x, team, mvp_u in [(lx, v.team_a, mvp_a), (rx, v.team_b, mvp_b)]:
@@ -179,26 +198,43 @@ async def render_results(v):
                     continue
                 m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
                 k, dth = v.stats[uid]
-                kd = round((k / dth), 2) if dth else round(float(k), 2)
+                kd = (k / dth) if dth else float(k)
 
-                is_mvp = (uid == mvp_u)
+                is_mvp = uid == mvp_u
                 strip_col, badge = status_strip(k, dth, is_mvp)
 
-                av = await avatar(s, m.display_avatar.url, 72)
+                av = await avatar(s, m.display_avatar.url)
                 img.paste(av, (base_x, y), av)
 
                 d.rectangle([base_x + table_w - 10, y, base_x + table_w, y + 72], fill=strip_col)
                 if badge:
                     d.text((base_x + table_w - 42, y + 20), badge, fill=strip_col, font=f(30))
 
-                name = clamp(d, m.display_name, f(32), table_w - 280)
+                name = clamp(d, m.display_name, f(32), name_w)
                 d.text((base_x + name_x, y + 20), name, fill="#ffd700" if is_mvp else "white", font=f(32))
 
-                d.text((base_x + k_x, y + 20), str(k), fill="white", font=f(32))
-                d.text((base_x + d_x, y + 20), str(dth), fill="white", font=f(32))
+                k_txt = fmt_num(k)
+                d_txt = fmt_num(dth)
+                kd_txt = "∞" if dth == 0 and k > 0 else fmt_num(kd)
 
-                kd_text = str(kd)
-                d.text((base_x + kd_x - d.textlength(kd_text, font=f(32)), y + 20), kd_text, fill="white", font=f(32))
+                d.text(
+                    (base_x + k_x + k_w - d.textlength(k_txt, font=f(32)), y + 20),
+                    k_txt,
+                    fill="white",
+                    font=f(32)
+                )
+                d.text(
+                    (base_x + d_x + d_w - d.textlength(d_txt, font=f(32)), y + 20),
+                    d_txt,
+                    fill="white",
+                    font=f(32)
+                )
+                d.text(
+                    (base_x + kd_x + kd_w - d.textlength(kd_txt, font=f(32)), y + 20),
+                    kd_txt,
+                    fill="white",
+                    font=f(32)
+                )
 
                 y += 84
                 if y > H - 90:
