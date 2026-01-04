@@ -1,4 +1,5 @@
 import os
+import re
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -21,10 +22,17 @@ async def on_ready():
     print(f"ONLINE as {bot.user}")
 
 async def fail(i):
-    if i.response.is_done():
-        await i.followup.send(ERR, ephemeral=True)
-    else:
-        await i.response.send_message(ERR, ephemeral=True)
+    try:
+        if i.response.is_done():
+            await i.followup.send(ERR, ephemeral=True)
+        else:
+            await i.response.send_message(ERR, ephemeral=True)
+    except Exception:
+        pass
+
+def _id_from_mention(s: str):
+    m = re.search(r"\d{15,21}", s or "")
+    return int(m.group(0)) if m else None
 
 def kd(k, d):
     return round(k / d, 2) if d else float(k)
@@ -64,11 +72,18 @@ class StatsModal(discord.ui.Modal, title="Enter Player Stats"):
     async def on_submit(self, interaction):
         if interaction.user.id not in self.view.controllers():
             return await fail(interaction)
-        self.view.stats[self.uid] = (int(self.kills.value), int(self.deaths.value))
+        try:
+            k = int(str(self.kills.value).strip())
+            d = int(str(self.deaths.value).strip())
+            if k < 0 or d < 0:
+                return await fail(interaction)
+        except Exception:
+            return await fail(interaction)
+        self.view.stats[self.uid] = (k, d)
         await interaction.response.edit_message(embed=self.view.results_embed(), view=self.view)
 
 class NotesModal(discord.ui.Modal, title="Add Notes"):
-    notes = discord.ui.TextInput(label="Notes", style=discord.TextStyle.paragraph, required=True)
+    notes = discord.ui.TextInput(label="Notes", style=discord.TextStyle.paragraph, required=True, max_length=1200)
 
     def __init__(self, view):
         super().__init__()
@@ -77,13 +92,14 @@ class NotesModal(discord.ui.Modal, title="Add Notes"):
     async def on_submit(self, interaction):
         if interaction.user.id not in self.view.controllers():
             return await fail(interaction)
-        self.view.notes = self.notes.value
+        self.view.notes = str(self.notes.value).strip()
         await interaction.response.edit_message(embed=self.view.results_embed(), view=self.view)
 
 class ResultsView(discord.ui.View):
-    def __init__(self, wager):
+    def __init__(self, wager, guild):
         super().__init__(timeout=None)
         self.wager = wager
+        self.guild = guild
         self.stats = {}
         self.notes = None
 
@@ -93,31 +109,48 @@ class ResultsView(discord.ui.View):
             s.add(self.wager.middleman_id)
         return s
 
-    def table(self, guild, team_ids):
+    def _name(self, uid):
+        m = self.guild.get_member(uid) if self.guild else None
+        if m:
+            return m.display_name
+        u = bot.get_user(uid)
+        return u.name if u else f"User{uid}"
+
+    def table(self, team_ids):
+        name_w = 16
         rows = []
         for uid in team_ids:
-            member = guild.get_member(uid)
-            name = member.display_name if member else f"User {uid}"
+            name = self._name(uid)
+            name = (name[:name_w-1] + "…") if len(name) > name_w else name
             k, d = self.stats.get(uid, (0, 0))
-            rows.append(f"{name:<14} | {k:^5} | {d:^6} | {kd(k,d):^6} | {dot(k,d)}")
-        return (
-            "```\nPLAYER         | KILLS | DEATHS | KD RATIO | \n"
-            + "\n".join(rows)
-            + "\n```"
-            if rows else "—"
-        )
+            ratio = kd(k, d)
+            rows.append(f"{name:<{name_w}}  {k:>5}  {d:>6}  {ratio:>7}  {dot(k,d)}")
+        header = f"{'PLAYER':<{name_w}}  {'KILLS':>5}  {'DEATHS':>6}  {'KD':>7}  "
+        body = "\n".join(rows) if rows else "—"
+        return f"```{header}\n{body}\n```" if rows else "—"
 
     def results_embed(self):
         ta = self.wager.team_a_ids()
         tb = self.wager.team_b_ids()
         suma = sum(self.stats.get(i, (0, 0))[0] for i in ta)
         sumb = sum(self.stats.get(i, (0, 0))[0] for i in tb)
-        winner = f"🏆 **Winner: {self.wager.a}**" if suma > sumb else f"🏆 **Winner: {self.wager.b}**" if sumb > suma else "🤝 **Draw**"
-        e = discord.Embed(title="🏁 MATCH RESULTS", description=winner, color=discord.Color.green())
-        e.add_field(name=self.wager.a, value=self.table(self.wager.guild, ta), inline=False)
-        e.add_field(name=self.wager.b, value=self.table(self.wager.guild, tb), inline=False)
+
+        if suma > sumb:
+            win = f"🏆 **Winner: {self.wager.a}**"
+            color = discord.Color.green()
+        elif sumb > suma:
+            win = f"🏆 **Winner: {self.wager.b}**"
+            color = discord.Color.green()
+        else:
+            win = "🤝 **Draw**"
+            color = discord.Color.gold()
+
+        e = discord.Embed(title="🏁 MATCH RESULTS", description=win, color=color)
+        e.add_field(name=f"{self.wager.a}  —  {suma} Kills", value=self.table(ta), inline=False)
+        e.add_field(name=f"{self.wager.b}  —  {sumb} Kills", value=self.table(tb), inline=False)
         if self.notes:
             e.add_field(name="Notes", value=self.notes, inline=False)
+        e.set_footer(text="Enter stats for each player • Finalize to log")
         return e
 
     @discord.ui.button(label="Enter Stats", style=discord.ButtonStyle.primary)
@@ -152,7 +185,10 @@ class MiddlemanAcceptView(discord.ui.View):
         if interaction.user.id != self.uid:
             return await fail(interaction)
         self.wager.middleman_id = self.uid
-        await interaction.message.delete()
+        try:
+            await interaction.message.delete()
+        except Exception:
+            pass
         await self.wager.try_start(interaction.channel)
 
 class MiddlemanPick(discord.ui.UserSelect):
@@ -177,35 +213,45 @@ class MiddlemanView(discord.ui.View):
         self.add_item(MiddlemanPick(wager))
 
 class WagerView(discord.ui.View):
-    def __init__(self, host_id, size, a, b, prize, time, rules):
+    def __init__(self, host_id, size, a, b, prize, time, rules, guild):
         super().__init__(timeout=None)
         self.host_id = host_id
         self.middleman_id = None
         self.no_middleman = False
-        self.size = size
-        self.a = a
-        self.b = b
-        self.prize = prize
-        self.time = time
-        self.rules = rules
+        self.size = max(1, min(int(size), 8))
+        self.a = str(a)[:40]
+        self.b = str(b)[:40]
+        self.prize = str(prize)[:1800]
+        self.time = str(time)[:80]
+        self.rules = str(rules)[:1200]
         self.team_a = []
         self.team_b = []
         self.status = "🟢 OPEN"
         self.msg_id = None
         self.begin_sent = False
-        self.guild = None
+        self.guild = guild
 
     def team_a_ids(self):
-        return [int(m[2:-1]) for m in self.team_a]
+        ids = []
+        for m in self.team_a:
+            x = _id_from_mention(m)
+            if x:
+                ids.append(x)
+        return ids
 
     def team_b_ids(self):
-        return [int(m[2:-1]) for m in self.team_b]
+        ids = []
+        for m in self.team_b:
+            x = _id_from_mention(m)
+            if x:
+                ids.append(x)
+        return ids
 
     def embed(self):
         e = discord.Embed(
             title="💎 WAGER",
             description=f"**Match:** {self.size}v{self.size} • **Start:** {self.time}\n**Prize:** {self.prize}",
-            color=discord.Color.blurple()
+            color=discord.Color.from_rgb(88, 101, 242)
         )
         e.add_field(name="Host", value=f"<@{self.host_id}>", inline=True)
         e.add_field(
@@ -219,13 +265,17 @@ class WagerView(discord.ui.View):
         e.add_field(name="\u200b", value="\u200b", inline=True)
         e.add_field(name="Rules", value=self.rules, inline=False)
         e.add_field(name="Status", value=self.status, inline=False)
+        e.set_footer(text="Join teams • Optional middleman • Teams full → React to Begin")
         return e
 
     async def redraw(self, interaction):
-        if interaction.response.is_done():
-            await interaction.message.edit(embed=self.embed(), view=self)
-        else:
-            await interaction.response.edit_message(embed=self.embed(), view=self)
+        try:
+            if interaction.response.is_done():
+                await interaction.message.edit(embed=self.embed(), view=self)
+            else:
+                await interaction.response.edit_message(embed=self.embed(), view=self)
+        except Exception:
+            await fail(interaction)
 
     async def try_start(self, channel):
         if self.begin_sent:
@@ -235,10 +285,7 @@ class WagerView(discord.ui.View):
                 self.begin_sent = True
                 users = set(self.team_a_ids() + self.team_b_ids())
                 mentions = " ".join(self.team_a + self.team_b)
-                await channel.send(
-                    f"{mentions}\n⚔️ **Teams are full. React to begin.**",
-                    view=BeginView(self, users)
-                )
+                await channel.send(f"{mentions}\n⚔️ **Teams are full. React to begin.**", view=BeginView(self, users))
 
     @discord.ui.button(label="Join Team A", style=discord.ButtonStyle.primary)
     async def join_a(self, interaction, _):
@@ -278,8 +325,7 @@ class WagerView(discord.ui.View):
     async def end(self, interaction, _):
         if interaction.user.id not in {self.host_id, self.middleman_id}:
             return await fail(interaction)
-        rv = ResultsView(self)
-        rv.wager.guild = interaction.guild
+        rv = ResultsView(self, interaction.guild)
         await interaction.response.edit_message(embed=rv.results_embed(), view=rv)
 
 @bot.tree.command(name="wager", guild=discord.Object(id=GUILD_ID))
@@ -299,9 +345,9 @@ async def wager(
         team_b_name,
         prize,
         start_time,
-        rules
+        rules,
+        interaction.guild
     )
-    view.guild = interaction.guild
     await interaction.response.send_message(embed=view.embed(), view=view)
     msg = await interaction.original_response()
     view.msg_id = msg.id
