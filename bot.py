@@ -85,3 +85,99 @@ class JoinButton(discord.ui.Button):
             if u in v.team_a:
                 v.team_a.remove(u)
             if u not in v.team_b:
+                v.team_b.append(u)
+
+        await v.update(interaction)
+
+class MiddlemanButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Pick Middleman", style=discord.ButtonStyle.secondary)
+
+    async def callback(self, interaction):
+        if interaction.user.id != self.view.host_id:
+            return
+        await interaction.response.send_message(view=MiddlemanSelectView(self.view), ephemeral=True)
+
+class EndButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="End Match", style=discord.ButtonStyle.danger)
+
+    async def callback(self, interaction):
+        await interaction.response.send_message("Match ended.", ephemeral=True)
+
+class MiddlemanSelect(discord.ui.UserSelect):
+    def __init__(self, view):
+        super().__init__(min_values=1, max_values=1)
+        self.view = view
+
+    async def callback(self, interaction):
+        m = interaction.guild.get_member(self.values[0].id)
+        if not m or not any(r.id == MIDDLEMAN_ROLE_ID for r in m.roles):
+            return await interaction.response.send_message("Invalid middleman", ephemeral=True)
+        self.view.middleman_id = m.id
+        await self.view.update(interaction)
+
+class MiddlemanSelectView(discord.ui.View):
+    def __init__(self, view):
+        super().__init__(timeout=60)
+        self.add_item(MiddlemanSelect(view))
+
+class WagerView(discord.ui.View):
+    def __init__(self, interaction, size, a, b, prize):
+        super().__init__(timeout=None)
+        self.guild = interaction.guild
+        self.host_id = interaction.user.id
+        self.host_name = interaction.user.display_name
+        self.size = size
+        self.a = a
+        self.b = b
+        self.prize = prize
+        self.team_a = []
+        self.team_b = []
+        self.middleman_id = None
+        self.message = None
+
+        self.add_item(JoinButton(f"Join {a}", "A"))
+        self.add_item(JoinButton(f"Join {b}", "B"))
+        self.add_item(MiddlemanButton())
+        self.add_item(EndButton())
+
+    @property
+    def middleman_name(self):
+        m = self.guild.get_member(self.middleman_id)
+        return m.display_name if m else ""
+
+    def team_a_ids(self):
+        return [uid_from_mention(m) for m in self.team_a if uid_from_mention(m)]
+
+    def team_b_ids(self):
+        return [uid_from_mention(m) for m in self.team_b if uid_from_mention(m)]
+
+    async def update(self, interaction):
+        img = await render_wager_image(self)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+
+        file = discord.File(buf, filename="wager.png")
+        embed = discord.Embed()
+        embed.set_image(url="attachment://wager.png")
+
+        await self.message.edit(embed=embed, attachments=[file], view=self)
+
+@bot.tree.command(name="wager", guild=discord.Object(id=GUILD_ID))
+async def wager(interaction: discord.Interaction, team_size: int, team_a: str, team_b: str, prize: str):
+    view = WagerView(interaction, team_size, team_a, team_b, prize)
+    img = await render_wager_image(view)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+
+    file = discord.File(buf, filename="wager.png")
+    embed = discord.Embed()
+    embed.set_image(url="attachment://wager.png")
+
+    await interaction.response.send_message(embed=embed, file=file, view=view)
+    view.message = await interaction.original_response()
+
+bot.run(TOKEN)
