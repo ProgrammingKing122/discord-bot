@@ -11,14 +11,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 def fail(interaction):
     if interaction.response.is_done():
-        return interaction.followup.send(
-            '❌ **Error has happened — please contact "Levi" for fixes.**',
-            ephemeral=True
-        )
-    return interaction.response.send_message(
-        '❌ **Error has happened — please contact "Levi" for fixes.**',
-        ephemeral=True
-    )
+        return interaction.followup.send('❌ **Error has happened — please contact "Levi" for fixes.**', ephemeral=True)
+    return interaction.response.send_message('❌ **Error has happened — please contact "Levi" for fixes.**', ephemeral=True)
 
 @bot.event
 async def setup_hook():
@@ -36,13 +30,10 @@ class ResultModal(discord.ui.Modal, title="End Wager"):
         self.view = view
 
     async def on_submit(self, interaction: discord.Interaction):
-        if interaction.user.id != self.view.host_id:
-            return await fail(interaction)
         try:
-            embed = interaction.message.embeds[0]
-            embed.color = discord.Color.green()
-            embed.set_field_at(self.view.status_i, name="Status", value="🏁 FINISHED", inline=False)
-            embed.add_field(name="Result", value=self.result.value, inline=False)
+            if interaction.user.id != self.view.host_id:
+                return await fail(interaction)
+            embed = self.view.build_embed(status="🏁 FINISHED", result=self.result.value)
             await interaction.response.edit_message(embed=embed, view=None)
         except Exception:
             await fail(interaction)
@@ -56,13 +47,11 @@ class BeginView(discord.ui.View):
     @discord.ui.button(label="React to Begin", style=discord.ButtonStyle.success, emoji="⚔️")
     async def begin(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            uid = interaction.user.id
-            if uid not in self.parent.ids:
+            if interaction.user.id not in self.parent.player_ids():
                 return await fail(interaction)
-            self.ready.add(uid)
+            self.ready.add(interaction.user.id)
             if len(self.ready) == self.parent.team_size * 2:
-                embed = interaction.message.embeds[0]
-                embed.set_field_at(self.parent.status_i, name="Status", value="⚔️ IN PROGRESS", inline=False)
+                embed = self.parent.build_embed(status="⚔️ IN PROGRESS")
                 await interaction.message.edit(embed=embed, view=None)
             else:
                 await interaction.response.send_message("Ready ✔", ephemeral=True)
@@ -70,31 +59,43 @@ class BeginView(discord.ui.View):
             await fail(interaction)
 
 class WagerView(discord.ui.View):
-    def __init__(self, host_id, team_size, a_name, b_name, field_map):
+    def __init__(self, host_id, team_size, a_name, b_name, prize, start_time):
         super().__init__(timeout=None)
         self.host_id = host_id
         self.team_size = team_size
         self.a_name = a_name
         self.b_name = b_name
+        self.prize = prize
+        self.start_time = start_time
         self.team_a = []
         self.team_b = []
-        self.field_map = field_map
-        self.status_i = field_map["status"]
-        self.ids = set()
         self.locked = False
 
-    def render(self):
-        return (
-            "\n".join(self.team_a) if self.team_a else "—",
-            "\n".join(self.team_b) if self.team_b else "—"
+    def player_ids(self):
+        return {int(u.strip("<@>")) for u in self.team_a + self.team_b}
+
+    def build_embed(self, status="🟢 OPEN", result=None):
+        embed = discord.Embed(
+            title="💎 WAGER",
+            description=(
+                f"**Match:** {self.team_size}v{self.team_size}\n"
+                f"**Start Time:** {self.start_time}\n\n"
+                f"**Prize**\n{self.prize}"
+            ),
+            color=discord.Color.from_rgb(88, 101, 242)
         )
+        embed.add_field(name="Host", value=f"<@{self.host_id}>", inline=False)
+        embed.add_field(name=self.a_name, value="\n".join(self.team_a) if self.team_a else "—", inline=True)
+        embed.add_field(name=self.b_name, value="\n".join(self.team_b) if self.team_b else "—", inline=True)
+        embed.add_field(name="Status", value=status, inline=False)
+        if result:
+            embed.add_field(name="Result", value=result, inline=False)
+        embed.set_footer(text="Join teams • React to begin • Host ends the wager")
+        return embed
 
     async def refresh(self, interaction):
         try:
-            embed = interaction.message.embeds[0]
-            a, b = self.render()
-            embed.set_field_at(self.field_map["a"], name=self.a_name, value=a, inline=True)
-            embed.set_field_at(self.field_map["b"], name=self.b_name, value=b, inline=True)
+            embed = self.build_embed()
             await interaction.response.edit_message(embed=embed, view=self)
             await self.check_full(interaction)
         except Exception:
@@ -105,9 +106,6 @@ class WagerView(discord.ui.View):
             return
         if len(self.team_a) == self.team_size and len(self.team_b) == self.team_size:
             self.locked = True
-            self.ids = {
-                int(u.strip("<@>")) for u in self.team_a + self.team_b
-            }
             mentions = " ".join(self.team_a + self.team_b)
             await interaction.followup.send(
                 f"{mentions}\n⚔️ **Teams are full — react to begin**",
@@ -157,35 +155,15 @@ async def wager(
     prize: str,
     start_time: str
 ):
-    embed = discord.Embed(
-        title="💎 WAGER",
-        description=(
-            f"**Match:** {team_size}v{team_size}\n"
-            f"**Start Time:** {start_time}\n\n"
-            f"**Prize**\n{prize}"
-        ),
-        color=discord.Color.from_rgb(88, 101, 242)
-    )
-    embed.add_field(name="Host", value=interaction.user.mention, inline=False)
-    embed.add_field(name=team_a_name, value="—", inline=True)
-    embed.add_field(name=team_b_name, value="—", inline=True)
-    embed.add_field(name="Status", value="🟢 OPEN", inline=False)
-    embed.set_footer(text="Join teams • React to begin • Host ends the wager")
-
-    field_map = {
-        "a": 1,
-        "b": 2,
-        "status": 3
-    }
-
     view = WagerView(
         interaction.user.id,
         team_size,
         team_a_name,
         team_b_name,
-        field_map
+        prize,
+        start_time
     )
-
+    embed = view.build_embed()
     await interaction.response.send_message(embed=embed, view=view)
 
 bot.run(TOKEN)
