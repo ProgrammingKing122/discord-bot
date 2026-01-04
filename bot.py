@@ -88,7 +88,8 @@ def win_line(v, ta_k, tb_k):
     return f"{w} WINS NARROWLY", "#4cff7a"
 
 async def render_wager(v):
-    img = Image.new("RGB", (1280, 720), "#07090d")
+    W, H = 1280, 720
+    img = Image.new("RGB", (W, H), "#07090d")
     bg(img)
     d = ImageDraw.Draw(img)
 
@@ -100,7 +101,11 @@ async def render_wager(v):
 
     d.text((160, 270), v.a, fill="#4cc2ff", font=f(48))
     d.text((820, 270), v.b, fill="#ffb84c", font=f(48))
-    d.text((600, 340), "VS", fill="white", font=f(96))
+
+    vs = "VS"
+    vs_font = f(96)
+    vs_x = (W - d.textlength(vs, font=vs_font)) // 2
+    d.text((vs_x, 340), vs, fill="white", font=vs_font)
 
     ay = by = 380
 
@@ -141,10 +146,13 @@ async def render_results(v):
     wl = clamp(d, wl, f(68), 1200)
     d.text((W // 2 - d.textlength(wl, font=f(68)) // 2, 24), wl, fill=wc, font=f(68))
 
-    left_head = clamp(d, f"{v.a} — {ta_k} KILLS", f(38), 560)
-    right_head = clamp(d, f"{v.b} — {tb_k} KILLS", f(38), 560)
-    d.text((60, 120), left_head, fill="#4cc2ff", font=f(38))
-    d.text((720, 120), right_head, fill="#ffb84c", font=f(38))
+    table_w = 680
+    lx, rx = 60, 760
+
+    left_head = clamp(d, f"{v.a} — {ta_k} KILLS", f(38), table_w)
+    right_head = clamp(d, f"{v.b} — {tb_k} KILLS", f(38), table_w)
+    d.text((lx, 120), left_head, fill="#4cc2ff", font=f(38))
+    d.text((rx, 120), right_head, fill="#ffb84c", font=f(38))
 
     def mvp(team):
         rows = []
@@ -164,8 +172,6 @@ async def render_results(v):
     mvp_a = mvp(v.team_a)
     mvp_b = mvp(v.team_b)
 
-    table_w = 680
-    lx, rx = 60, 760
     header_y = 200
     row_start = header_y + 52
 
@@ -180,18 +186,14 @@ async def render_results(v):
     d_x = table_w - (d_w + kd_w)
     kd_x = table_w - kd_w
 
-    d.text((lx + name_x, header_y), "NAME", fill="#b5b9c7", font=f(26))
-    d.text((lx + k_x, header_y), "K", fill="#b5b9c7", font=f(26))
-    d.text((lx + d_x, header_y), "D", fill="#b5b9c7", font=f(26))
-    d.text((lx + kd_x + kd_w - 26, header_y), "KD", fill="#b5b9c7", font=f(26))
-
-    d.text((rx + name_x, header_y), "NAME", fill="#b5b9c7", font=f(26))
-    d.text((rx + k_x, header_y), "K", fill="#b5b9c7", font=f(26))
-    d.text((rx + d_x, header_y), "D", fill="#b5b9c7", font=f(26))
-    d.text((rx + kd_x + kd_w - 26, header_y), "KD", fill="#b5b9c7", font=f(26))
+    for bx in (lx, rx):
+        d.text((bx + name_x, header_y), "NAME", fill="#b5b9c7", font=f(26))
+        d.text((bx + k_x, header_y), "K", fill="#b5b9c7", font=f(26))
+        d.text((bx + d_x, header_y), "D", fill="#b5b9c7", font=f(26))
+        d.text((bx + kd_x + kd_w - 26, header_y), "KD", fill="#b5b9c7", font=f(26))
 
     async with aiohttp.ClientSession() as s:
-        for base_x, team, mvp_u in [(lx, v.team_a, mvp_a), (rx, v.team_b, mvp_b)]:
+        for base_x, team, mvp_u in ((lx, v.team_a, mvp_a), (rx, v.team_b, mvp_b)):
             y = row_start
             for uid in team:
                 if uid not in v.stats:
@@ -217,24 +219,9 @@ async def render_results(v):
                 d_txt = fmt_num(dth)
                 kd_txt = "∞" if dth == 0 and k > 0 else fmt_num(kd)
 
-                d.text(
-                    (base_x + k_x + k_w - d.textlength(k_txt, font=f(32)), y + 20),
-                    k_txt,
-                    fill="white",
-                    font=f(32)
-                )
-                d.text(
-                    (base_x + d_x + d_w - d.textlength(d_txt, font=f(32)), y + 20),
-                    d_txt,
-                    fill="white",
-                    font=f(32)
-                )
-                d.text(
-                    (base_x + kd_x + kd_w - d.textlength(kd_txt, font=f(32)), y + 20),
-                    kd_txt,
-                    fill="white",
-                    font=f(32)
-                )
+                d.text((base_x + k_x + k_w - d.textlength(k_txt, font=f(32)), y + 20), k_txt, fill="white", font=f(32))
+                d.text((base_x + d_x + d_w - d.textlength(d_txt, font=f(32)), y + 20), d_txt, fill="white", font=f(32))
+                d.text((base_x + kd_x + kd_w - d.textlength(kd_txt, font=f(32)), y + 20), kd_txt, fill="white", font=f(32))
 
                 y += 84
                 if y > H - 90:
