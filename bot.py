@@ -30,6 +30,15 @@ async def avatar(session, url, s=72):
     async with session.get(url) as r:
         return Image.open(BytesIO(await r.read())).convert("RGBA").resize((s, s))
 
+def status_icon(k, d):
+    if k == 0 and d >= 2:
+        return "☠", "#ff4c4c"
+    if k > d:
+        return "/", "#4cff7a"
+    if k == d:
+        return "/", "#ffd24c"
+    return "/", "#ff4c4c"
+
 async def render_wager(v):
     img = Image.new("RGB", (1280, 720), "#0b0d12")
     d = ImageDraw.Draw(img)
@@ -83,7 +92,39 @@ async def render_results(v):
     d.text((100, 180), f"{v.a} — {ta_k} KILLS", fill="#4cc2ff", font=f(40))
     d.text((760, 180), f"{v.b} — {tb_k} KILLS", fill="#ffb84c", font=f(40))
 
-    y_a = y_b = 240
+    def mvp(team):
+        best_uid = None
+        best_score = None
+        for u in team:
+            if u not in v.stats:
+                continue
+            k, dt = v.stats[u]
+            kd = (k / dt) if dt else float(k)
+            score = (k, kd)
+            if best_score is None or score > best_score:
+                best_score = score
+                best_uid = u
+        return best_uid
+
+    mvp_a = mvp(v.team_a)
+    mvp_b = mvp(v.team_b)
+
+    lx = 70
+    rx = 690
+    header_y = 220
+    row_y_a = 255
+    row_y_b = 255
+
+    def draw_headers(x, name_color):
+        d.text((x + 90, header_y), "NAME", fill="#b5b9c7", font=f(22))
+        d.text((x + 360, header_y), "K", fill="#b5b9c7", font=f(22))
+        d.text((x + 420, header_y), "D", fill="#b5b9c7", font=f(22))
+        d.text((x + 480, header_y), "KD", fill="#b5b9c7", font=f(22))
+        d.text((x + 560, header_y), " ", fill="#b5b9c7", font=f(22))
+        d.rectangle([x, header_y + 35, x + 560, header_y + 37], fill=name_color)
+
+    draw_headers(lx, "#4cc2ff")
+    draw_headers(rx, "#ffb84c")
 
     async with aiohttp.ClientSession() as s:
         for uid in v.team_a:
@@ -91,24 +132,48 @@ async def render_results(v):
                 continue
             m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
             k, dth = v.stats[uid]
-            kd = round(k / dth, 2) if dth else k
-            av = await avatar(s, m.display_avatar.url)
-            img.paste(av, (80, y_a), av)
-            d.text((170, y_a + 10), m.display_name, fill="white", font=f(28))
-            d.text((170, y_a + 45), f"K {k}  D {dth}  KD {kd}", fill="#b5b9c7", font=f(24))
-            y_a += 90
+            kd = round((k / dth), 2) if dth else round(float(k), 2)
+            icon, col = status_icon(k, dth)
+
+            is_mvp = (uid == mvp_a)
+            name_col = "#ffd700" if is_mvp else "white"
+            badge = "👑" if is_mvp else icon
+            badge_col = "#ffd700" if is_mvp else col
+
+            av = await avatar(s, m.display_avatar.url, 64)
+            img.paste(av, (lx, row_y_a), av)
+
+            d.text((lx + 85, row_y_a + 10), m.display_name, fill=name_col, font=f(28))
+            d.text((lx + 360, row_y_a + 10), str(k), fill="white", font=f(28))
+            d.text((lx + 420, row_y_a + 10), str(dth), fill="white", font=f(28))
+            d.text((lx + 480, row_y_a + 10), str(kd), fill="white", font=f(28))
+            d.text((lx + 545, row_y_a + 6), badge, fill=badge_col, font=f(34))
+
+            row_y_a += 78
 
         for uid in v.team_b:
             if uid not in v.stats:
                 continue
             m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
             k, dth = v.stats[uid]
-            kd = round(k / dth, 2) if dth else k
-            av = await avatar(s, m.display_avatar.url)
-            img.paste(av, (740, y_b), av)
-            d.text((830, y_b + 10), m.display_name, fill="white", font=f(28))
-            d.text((830, y_b + 45), f"K {k}  D {dth}  KD {kd}", fill="#b5b9c7", font=f(24))
-            y_b += 90
+            kd = round((k / dth), 2) if dth else round(float(k), 2)
+            icon, col = status_icon(k, dth)
+
+            is_mvp = (uid == mvp_b)
+            name_col = "#ffd700" if is_mvp else "white"
+            badge = "👑" if is_mvp else icon
+            badge_col = "#ffd700" if is_mvp else col
+
+            av = await avatar(s, m.display_avatar.url, 64)
+            img.paste(av, (rx, row_y_b), av)
+
+            d.text((rx + 85, row_y_b + 10), m.display_name, fill=name_col, font=f(28))
+            d.text((rx + 360, row_y_b + 10), str(k), fill="white", font=f(28))
+            d.text((rx + 420, row_y_b + 10), str(dth), fill="white", font=f(28))
+            d.text((rx + 480, row_y_b + 10), str(kd), fill="white", font=f(28))
+            d.text((rx + 545, row_y_b + 6), badge, fill=badge_col, font=f(34))
+
+            row_y_b += 78
 
     return img
 
@@ -121,11 +186,15 @@ class Join(discord.ui.Button):
         v = self.view
         uid = i.user.id
         if self.side == "A":
-            if uid in v.team_b: v.team_b.remove(uid)
-            if uid not in v.team_a: v.team_a.append(uid)
+            if uid in v.team_b:
+                v.team_b.remove(uid)
+            if uid not in v.team_a:
+                v.team_a.append(uid)
         else:
-            if uid in v.team_a: v.team_a.remove(uid)
-            if uid not in v.team_b: v.team_b.append(uid)
+            if uid in v.team_a:
+                v.team_a.remove(uid)
+            if uid not in v.team_b:
+                v.team_b.append(uid)
         await i.response.defer()
         await v.update()
 
@@ -160,6 +229,19 @@ class End(discord.ui.Button):
             return await i.response.send_message("Not allowed", ephemeral=True)
         await i.response.edit_message(view=StatsView(self.view))
 
+class Cancel(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Cancel", style=discord.ButtonStyle.danger)
+
+    async def callback(self, i):
+        if i.user.id not in {self.view.host_id, self.view.middleman_id}:
+            return await i.response.send_message("Not allowed", ephemeral=True)
+        await i.response.defer()
+        try:
+            await self.view.message.delete()
+        except:
+            pass
+
 class MMSelect(discord.ui.UserSelect):
     def __init__(self, v):
         super().__init__(min_values=1, max_values=1)
@@ -191,18 +273,32 @@ class StatsModal(discord.ui.Modal, title="Enter Stats"):
     async def on_submit(self, i):
         if i.user.id not in {self.v.host_id, self.v.middleman_id}:
             return await i.response.send_message("Not allowed", ephemeral=True)
-        self.v.stats[self.uid] = (int(self.kills.value), int(self.deaths.value))
+        try:
+            k = int(self.kills.value)
+            d = int(self.deaths.value)
+        except:
+            return await i.response.send_message("Invalid numbers", ephemeral=True)
+        self.v.stats[self.uid] = (k, d)
         await i.response.send_message("Saved", ephemeral=True)
 
-class PlayerPick(discord.ui.UserSelect):
+class PlayerPick(discord.ui.Select):
     def __init__(self, v):
-        super().__init__(min_values=1, max_values=1, placeholder="Select player")
         self.v = v
+        opts = []
+        seen = set()
+        for uid in (v.team_a + v.team_b):
+            if uid in seen:
+                continue
+            seen.add(uid)
+            m = v.guild.get_member(uid)
+            if m:
+                opts.append(discord.SelectOption(label=m.display_name, value=str(uid)))
+        super().__init__(min_values=1, max_values=1, placeholder="Select war player", options=opts[:25])
 
     async def callback(self, i):
         if i.user.id not in {self.v.host_id, self.v.middleman_id}:
             return await i.response.send_message("Not allowed", ephemeral=True)
-        uid = self.values[0].id
+        uid = int(self.values[0])
         if uid not in self.v.team_a and uid not in self.v.team_b:
             return await i.response.send_message("Player not in match", ephemeral=True)
         await i.response.send_modal(StatsModal(self.v, uid))
@@ -252,6 +348,7 @@ class WagerView(discord.ui.View):
         self.add_item(PickMM())
         self.add_item(NoMM())
         self.add_item(End())
+        self.add_item(Cancel())
 
     @property
     def middleman_name(self):
