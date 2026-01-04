@@ -8,7 +8,6 @@ if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN environment variable not set")
 
 intents = discord.Intents.default()
-intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -16,8 +15,12 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f"ONLINE as {bot.user}")
 
-@bot.command()
-async def ping(ctx):
-    await ctx.send("All set up!")
+@bot.tree.command(name="ping", description="Check if the bot is online")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message("All set up!")
+
+@bot.event
+async def setup_hook():
+    await bot.tree.sync()
 
 bot.run(TOKEN)
