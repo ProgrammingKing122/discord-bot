@@ -1,2 +1,2 @@
-discord.py==2.6.4
-pillow
+pip install -U discord.py pillow
+
