@@ -10,7 +10,8 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = 1443765937793667194
 MIDDLEMAN_ROLE_ID = 1457241934832861255
 
-FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_PATH = os.path.join(BASE_DIR, "fonts", "Inter-Bold.ttf")
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -23,6 +24,12 @@ def uid_from_mention(s):
     m = re.search(r"\d{15,21}", s or "")
     return int(m.group(0)) if m else None
 
+def load_font(size):
+    try:
+        return ImageFont.truetype(FONT_PATH, size)
+    except Exception:
+        return ImageFont.load_default()
+
 async def fetch_avatar(session, url, size=128):
     async with session.get(url) as r:
         data = await r.read()
@@ -33,9 +40,9 @@ async def render_wager_image(view):
     img = Image.new("RGB", (W, H), "#0b0d12")
     d = ImageDraw.Draw(img)
 
-    title = ImageFont.truetype(FONT_BOLD, 64)
-    header = ImageFont.truetype(FONT_BOLD, 48)
-    body = ImageFont.truetype(FONT_BOLD, 36)
+    title = load_font(64)
+    header = load_font(48)
+    body = load_font(36)
 
     d.text((40, 30), f"WAGER {view.size}v{view.size}", fill="white", font=title)
     d.text((40, 110), f"Prize: {view.prize}", fill="#b5b9c7", font=body)
@@ -104,10 +111,7 @@ class MiddlemanButton(discord.ui.Button):
     async def callback(self, interaction):
         if interaction.user.id != self.view.host_id:
             return
-        await interaction.response.send_message(
-            view=MiddlemanSelectView(self.view),
-            ephemeral=True
-        )
+        await interaction.response.send_message(view=MiddlemanSelectView(self.view), ephemeral=True)
 
 class EndButton(discord.ui.Button):
     def __init__(self):
