@@ -4,19 +4,20 @@ from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
+if not TOKEN:
+    raise RuntimeError("DISCORD_TOKEN environment variable not set")
+
 intents = discord.Intents.default()
+intents.message_content = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f"Online as {bot.user}")
+    print(f"ONLINE as {bot.user}")
 
-@bot.tree.command(name="ping", description="Ping test")
-async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message("All set up!")
-
-@bot.event
-async def setup_hook():
-    await bot.tree.sync()
+@bot.command()
+async def ping(ctx):
+    await ctx.send("All set up!")
 
 bot.run(TOKEN)
