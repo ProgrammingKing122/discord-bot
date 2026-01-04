@@ -29,58 +29,50 @@ class EndModal(discord.ui.Modal, title="End Wager"):
     score = discord.ui.TextInput(label="Score", required=True)
     notes = discord.ui.TextInput(label="Notes", required=False, style=discord.TextStyle.paragraph)
 
-    def __init__(self, view):
+    def __init__(self, wager):
         super().__init__()
-        self.view = view
+        self.wager = wager
 
     async def on_submit(self, interaction):
-        if interaction.user.id not in self.view.controllers():
+        if interaction.user.id not in self.wager.controllers():
             return await fail(interaction)
-        self.view.status = "🏁 FINISHED"
-        self.view.result = (
-            f"**Winner:** {self.winner.value}\n"
-            f"**Score:** {self.score.value}\n"
-            f"{self.notes.value}"
-        )
-        await interaction.response.edit_message(embed=self.view.embed(), view=None)
+        self.wager.status = "🏁 FINISHED"
+        self.wager.result = f"**Winner:** {self.winner.value}\n**Score:** {self.score.value}\n{self.notes.value}"
+        await interaction.response.edit_message(embed=self.wager.embed(), view=None)
 
 class MiddlemanAcceptView(discord.ui.View):
-    def __init__(self, view, user_id):
+    def __init__(self, wager, user_id):
         super().__init__(timeout=120)
-        self.view = view
+        self.wager = wager
         self.user_id = user_id
 
     @discord.ui.button(label="Accept Middleman", style=discord.ButtonStyle.success)
     async def accept(self, interaction, _):
         if interaction.user.id != self.user_id:
             return await fail(interaction)
-        self.view.middleman_id = self.user_id
+        self.wager.middleman_id = self.user_id
         await interaction.message.delete()
-        await interaction.channel.send(
-            f"🧑‍⚖️ <@{self.user_id}> is now the **Middleman**."
-        )
-        await interaction.channel.fetch_message(self.view.msg_id).then(
-            lambda m: m.edit(embed=self.view.embed(), view=self.view)
-        )
+        msg = await interaction.channel.fetch_message(self.wager.msg_id)
+        await msg.edit(embed=self.wager.embed(), view=self.wager)
 
 class MiddlemanPick(discord.ui.UserSelect):
-    def __init__(self, view):
+    def __init__(self, wager):
         super().__init__(min_values=1, max_values=1)
-        self.view = view
+        self.wager = wager
 
     async def callback(self, interaction):
-        if interaction.user.id != self.view.host_id:
+        if interaction.user.id != self.wager.host_id:
             return await fail(interaction)
         target = self.values[0]
         await interaction.response.send_message(
-            f"<@{target.id}> — you’ve been selected as **Middleman**.",
-            view=MiddlemanAcceptView(self.view, target.id)
+            f"<@{target.id}> you were selected as **Middleman**.",
+            view=MiddlemanAcceptView(self.wager, target.id)
         )
 
 class MiddlemanView(discord.ui.View):
-    def __init__(self, view):
+    def __init__(self, wager):
         super().__init__(timeout=60)
-        self.add_item(MiddlemanPick(view))
+        self.add_item(MiddlemanPick(wager))
 
 class WagerView(discord.ui.View):
     def __init__(self, host_id, size, a, b, prize, time, rules):
@@ -178,7 +170,8 @@ async def wager(
         start_time,
         rules
     )
-    msg = await interaction.response.send_message(embed=view.embed(), view=view)
+    await interaction.response.send_message(embed=view.embed(), view=view)
+    msg = await interaction.original_response()
     view.msg_id = msg.id
 
 bot.run(TOKEN)
