@@ -1,5 +1,4 @@
 import os
-import re
 import discord
 import aiohttp
 from io import BytesIO
@@ -14,20 +13,17 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE_DIR, "fonts", "Inter_24pt-ExtraBoldItalic.ttf")
 
 intents = discord.Intents.default()
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def setup_hook():
     await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
 
-def uid_from_mention(s):
-    m = re.search(r"\d{15,21}", s or "")
-    return int(m.group(0)) if m else None
-
 def font(size):
     try:
         return ImageFont.truetype(FONT_PATH, size)
-    except Exception:
+    except:
         return ImageFont.load_default()
 
 async def fetch_avatar(session, url, size=120):
@@ -56,19 +52,15 @@ async def render_image(view):
     by = 330
 
     async with aiohttp.ClientSession() as session:
-        for uid in view.team_a_ids():
-            m = view.guild.get_member(uid)
-            if not m:
-                continue
+        for uid in view.team_a:
+            m = view.guild.get_member(uid) or await view.guild.fetch_member(uid)
             av = await fetch_avatar(session, m.display_avatar.url)
             img.paste(av, (120, ay), av)
             d.text((270, ay + 40), m.display_name, fill="white", font=body)
             ay += 150
 
-        for uid in view.team_b_ids():
-            m = view.guild.get_member(uid)
-            if not m:
-                continue
+        for uid in view.team_b:
+            m = view.guild.get_member(uid) or await view.guild.fetch_member(uid)
             av = await fetch_avatar(session, m.display_avatar.url)
             img.paste(av, (780, by), av)
             d.text((930, by + 40), m.display_name, fill="white", font=body)
@@ -89,18 +81,18 @@ class JoinButton(discord.ui.Button):
     async def callback(self, interaction):
         await interaction.response.defer()
         v = self.view
-        u = interaction.user.mention
+        uid = interaction.user.id
 
         if self.side == "A":
-            if u in v.team_b:
-                v.team_b.remove(u)
-            if u not in v.team_a:
-                v.team_a.append(u)
+            if uid in v.team_b:
+                v.team_b.remove(uid)
+            if uid not in v.team_a:
+                v.team_a.append(uid)
         else:
-            if u in v.team_a:
-                v.team_a.remove(u)
-            if u not in v.team_b:
-                v.team_b.append(u)
+            if uid in v.team_a:
+                v.team_a.remove(uid)
+            if uid not in v.team_b:
+                v.team_b.append(uid)
 
         await v.update()
 
@@ -164,12 +156,6 @@ class WagerView(discord.ui.View):
     def middleman_name(self):
         m = self.guild.get_member(self.middleman_id)
         return m.display_name if m else ""
-
-    def team_a_ids(self):
-        return [uid_from_mention(m) for m in self.team_a if uid_from_mention(m)]
-
-    def team_b_ids(self):
-        return [uid_from_mention(m) for m in self.team_b if uid_from_mention(m)]
 
     async def update(self):
         img = await render_image(self)
