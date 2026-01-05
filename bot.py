@@ -7,6 +7,7 @@ from discord import app_commands
 from PIL import Image, ImageDraw, ImageFont
 from discord.ext import commands
 
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = 1443765937793667194
 MIDDLEMAN_ROLE_ID = 1457241934832861255
