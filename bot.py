@@ -1254,21 +1254,10 @@ class WagerView(discord.ui.View):
                 return False
             self.state.set_phase("STATS")
             self._rebuild_items()
-
-        try:
-            if self.message:
-                await self.message.edit(view=StatsView(self))
-        except:
-            pass
         return True
 
     async def _cleanup_lobby_after(self, seconds: int):
         await asyncio.sleep(seconds)
-        try:
-            if self.message:
-                await self.message.delete()
-        except:
-            pass
 
     async def finalize_results(self, interaction: discord.Interaction):
         async with self.lock:
@@ -1327,6 +1316,17 @@ class WagerView(discord.ui.View):
             winner_id=winner_id,
             results_image=results_file
         )
+
+        try:
+            await interaction.followup.send(embed=e, file=results_file)
+        except:
+            pass
+
+        try:
+            if self.message:
+                await self.message.delete()
+        except:
+            pass
 
         e = discord.Embed()
         e.set_image(url="attachment://results.png")
@@ -1411,13 +1411,3 @@ _BIG_BODY_PAD = """
 
 
 bot.run(TOKEN)
-
-        try:
-            await interaction.followup.send(embed=e, file=results_file)
-        except:
-            pass
-        try:
-            if self.message:
-                await self.message.delete()
-        except:
-            pass
