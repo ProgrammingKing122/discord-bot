@@ -901,17 +901,17 @@ class EndMatchButton(discord.ui.Button):
     async def callback(self, i: discord.Interaction):
         v = self.view
         async with v.lock:
+            if v.phase in ("STATS", "ENDED"):
+                return await i.response.send_message("Already ended.", ephemeral=True)
             if v.state.ending:
-                return await i.response.send_message("Already ending...", ephemeral=True)
+                return await i.response.send_message("Finalizing...", ephemeral=True)
             if not is_controller(v, i.user.id):
                 return await i.response.send_message("Not allowed", ephemeral=True)
-            v.state.ending = True
         try:
             await i.response.defer()
         except:
             pass
         await v.hard_end_to_stats()
-
 
 class CancelButton(discord.ui.Button):
     def __init__(self):
@@ -1260,12 +1260,19 @@ class WagerView(discord.ui.View):
         await asyncio.sleep(seconds)
 
     async def finalize_results(self, interaction: discord.Interaction):
-        async with self.lock:
+                async with self.lock:
+            if self.state.ending:
+                return
             if self.phase != "STATS":
                 try:
-                    return await interaction.response.send_message("Not in stats phase.", ephemeral=True)
+                    if interaction.response.is_done():
+                        await interaction.followup.send("Not in stats phase.", ephemeral=True)
+                    else:
+                        await interaction.response.send_message("Not in stats phase.", ephemeral=True)
                 except:
-                    return
+                    pass
+                return
+            self.state.ending = True
             self.state.set_phase("ENDED")
 
         fighters = list(self.fighters_set)
