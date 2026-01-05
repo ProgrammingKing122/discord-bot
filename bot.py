@@ -1,12 +1,12 @@
 import os
 import math
+import asyncio
 import discord
 import aiohttp
 from io import BytesIO
 from discord import app_commands
 from PIL import Image, ImageDraw, ImageFont
 from discord.ext import commands
-
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = 1443765937793667194
@@ -151,6 +151,19 @@ def status_strip(k: int, dth: int, is_mvp: bool):
         return "#ffd24c", ""
     return "#ff4c4c", ""
 
+def phase_label(phase: str):
+    if phase == "LOBBY":
+        return "LOBBY"
+    if phase == "READY":
+        return "READY UP"
+    if phase == "LIVE":
+        return "LIVE"
+    if phase == "STATS":
+        return "STATS ENTRY"
+    if phase == "ENDED":
+        return "ENDED"
+    return phase
+
 async def render_wager(v) -> Image.Image:
     W, H = 1920, 1080
     img = Image.new("RGB", (W, H))
@@ -160,7 +173,8 @@ async def render_wager(v) -> Image.Image:
     a_name = SAFE_TEAM(v.a, "TEAM A")
     b_name = SAFE_TEAM(v.b, "TEAM B")
 
-    t_font, t_text = FIT(d, f"WAGER {v.size}v{v.size}", 96, 72, W - 160)
+    top = f"WAGER {v.size}v{v.size} — {phase_label(v.phase)}"
+    t_font, t_text = FIT(d, top, 96, 68, W - 160)
     d.text((80, 54), t_text, fill="white", font=t_font)
 
     p_font, p_text = FIT(d, f"Prize: {v.prize}", 52, 34, W - 160)
@@ -173,6 +187,14 @@ async def render_wager(v) -> Image.Image:
     m_font, m_text = FIT(d, f"Middleman: {mm}", 52, 34, W - 160)
     d.text((80, 298), m_text, fill="#b5b9c7", font=m_font)
 
+    if v.phase in ("READY", "LIVE", "STATS", "ENDED"):
+        ra = sum(1 for u in v.team_a if v.ready.get(u))
+        rb = sum(1 for u in v.team_b if v.ready.get(u))
+        need = v.size
+        rline = f"Ready: {ra}/{need}  |  {rb}/{need}"
+        rf, rt = FIT(d, rline, 52, 34, W - 160)
+        d.text((80, 360), rt, fill="#d8dbe6", font=rf)
+
     margin = 120
     table_w = (W - margin * 3) // 2
     lx = margin
@@ -181,39 +203,48 @@ async def render_wager(v) -> Image.Image:
     la_font, la_text = FIT(d, a_name, 72, 46, table_w)
     lb_font, lb_text = FIT(d, b_name, 72, 46, table_w)
 
-    d.text((lx, 390), la_text, fill="#4cc2ff", font=la_font)
-    d.text((rx, 390), lb_text, fill="#ffb84c", font=lb_font)
+    d.text((lx, 430), la_text, fill="#4cc2ff", font=la_font)
+    d.text((rx, 430), lb_text, fill="#ffb84c", font=lb_font)
 
-    vs = "VS"
-    vs_font, vs_text = FIT(d, vs, 120, 84, 260)
-    d.text((FIT_CENTER_X(d, vs_text, vs_font, W // 2), 430), vs_text, fill="white", font=vs_font)
+    vs_font, vs_text = FIT(d, "VS", 120, 84, 260)
+    d.text((FIT_CENTER_X(d, vs_text, vs_font, W // 2), 470), vs_text, fill="white", font=vs_font)
 
-    line_y = 470
+    line_y = 510
     d.line([(lx, line_y), (lx + table_w, line_y)], fill=(76, 194, 255), width=5)
     d.line([(rx, line_y), (rx + table_w, line_y)], fill=(255, 184, 76), width=5)
 
-    ay = 520
-    by = 520
+    ay = 560
+    by = 560
     avatar_size = 88
     row_h = 112
 
     async with aiohttp.ClientSession() as s:
-        for uid in v.team_a:
+        for uid in v.team_a[: v.size]:
             m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
             av = await fetch_avatar(s, m.display_avatar.url, avatar_size)
             img.paste(av, (lx, ay), av)
-            nf, nt = FIT(d, m.display_name, 50, 34, table_w - avatar_size - 40)
+            maxw = table_w - avatar_size - 40 - 120
+            nf, nt = FIT(d, m.display_name, 50, 34, maxw)
             d.text((lx + avatar_size + 22, ay + 18), nt, fill="white", font=nf)
+            if v.phase in ("READY", "LIVE", "STATS", "ENDED"):
+                r = "READY" if v.ready.get(uid) else "NOT READY"
+                rf, rt = FIT(d, r, 36, 26, 180)
+                d.text((lx + table_w - 10 - TL(d, rt, rf), ay + 26), rt, fill="#ffd24c" if v.ready.get(uid) else "#ff4c4c", font=rf)
             ay += row_h
             if ay > H - 220:
                 break
 
-        for uid in v.team_b:
+        for uid in v.team_b[: v.size]:
             m = v.guild.get_member(uid) or await v.guild.fetch_member(uid)
             av = await fetch_avatar(s, m.display_avatar.url, avatar_size)
             img.paste(av, (rx, by), av)
-            nf, nt = FIT(d, m.display_name, 50, 34, table_w - avatar_size - 40)
+            maxw = table_w - avatar_size - 40 - 120
+            nf, nt = FIT(d, m.display_name, 50, 34, maxw)
             d.text((rx + avatar_size + 22, by + 18), nt, fill="white", font=nf)
+            if v.phase in ("READY", "LIVE", "STATS", "ENDED"):
+                r = "READY" if v.ready.get(uid) else "NOT READY"
+                rf, rt = FIT(d, r, 36, 26, 180)
+                d.text((rx + table_w - 10 - TL(d, rt, rf), by + 26), rt, fill="#ffd24c" if v.ready.get(uid) else "#ff4c4c", font=rf)
             by += row_h
             if by > H - 220:
                 break
@@ -329,6 +360,13 @@ async def render_results(v) -> Image.Image:
     d.text((FIT_CENTER_X(d, footer, ff, W // 2), H - 68), footer, fill="#d0d0d0", font=ff)
     return img
 
+def is_controller(v, uid: int) -> bool:
+    if uid == v.host_id:
+        return True
+    if v.middleman_id and uid == v.middleman_id:
+        return True
+    return False
+
 class Join(discord.ui.Button):
     def __init__(self, label: str, side: str):
         super().__init__(label=label, style=discord.ButtonStyle.primary)
@@ -336,60 +374,176 @@ class Join(discord.ui.Button):
 
     async def callback(self, i: discord.Interaction):
         v = self.view
-        uid = i.user.id
+        async with v.lock:
+            if v.phase != "LOBBY":
+                try:
+                    return await i.response.send_message("Match is locked.", ephemeral=True)
+                except:
+                    return
+            uid = i.user.id
 
-        if self.side == "A":
-            if uid in v.team_b:
-                v.team_b.remove(uid)
-            if uid not in v.team_a:
-                v.team_a.append(uid)
-        else:
-            if uid in v.team_a:
-                v.team_a.remove(uid)
-            if uid not in v.team_b:
-                v.team_b.append(uid)
+            if self.side == "A":
+                if uid in v.team_b:
+                    v.team_b.remove(uid)
+                if uid not in v.team_a:
+                    if len(v.team_a) >= v.size:
+                        try:
+                            return await i.response.send_message("Team A is full.", ephemeral=True)
+                        except:
+                            return
+                    v.team_a.append(uid)
+            else:
+                if uid in v.team_a:
+                    v.team_a.remove(uid)
+                if uid not in v.team_b:
+                    if len(v.team_b) >= v.size:
+                        try:
+                            return await i.response.send_message("Team B is full.", ephemeral=True)
+                        except:
+                            return
+                    v.team_b.append(uid)
 
-        await i.response.defer()
+            v._cleanup_ready()
+
+            full = (len(v.team_a) >= v.size and len(v.team_b) >= v.size)
+            if full:
+                v.phase = "READY"
+                v._init_ready()
+
+            try:
+                await i.response.defer()
+            except:
+                pass
+
         await v.update()
+
+        if full:
+            await v.ping_fighters_ready(i)
 
 class PickMM(discord.ui.Button):
     def __init__(self):
         super().__init__(label="Pick Middleman", style=discord.ButtonStyle.secondary)
 
     async def callback(self, i: discord.Interaction):
-        if i.user.id != self.view.host_id:
+        v = self.view
+        if i.user.id != v.host_id:
             return await i.response.send_message("Host only", ephemeral=True)
         await i.response.defer(ephemeral=True)
-        await i.followup.send("Select middleman", view=MMView(self.view), ephemeral=True)
+        await i.followup.send("Select middleman", view=MMView(v), ephemeral=True)
 
 class NoMM(discord.ui.Button):
     def __init__(self):
         super().__init__(label="No Middleman", style=discord.ButtonStyle.secondary)
 
     async def callback(self, i: discord.Interaction):
-        if i.user.id != self.view.host_id:
+        v = self.view
+        if i.user.id != v.host_id:
             return await i.response.send_message("Host only", ephemeral=True)
-        self.view.middleman_id = None
-        self.view.no_middleman = True
-        await i.response.defer()
-        await self.view.update()
+        async with v.lock:
+            if v.phase not in ("LOBBY", "READY"):
+                return await i.response.send_message("Too late to change middleman.", ephemeral=True)
+            v.middleman_id = None
+            v.no_middleman = True
+            try:
+                await i.response.defer()
+            except:
+                pass
+        await v.update()
+
+class ReadyUp(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Ready Up", style=discord.ButtonStyle.success)
+
+    async def callback(self, i: discord.Interaction):
+        v = self.view
+        uid = i.user.id
+
+        async with v.lock:
+            if v.phase != "READY":
+                return await i.response.send_message("Not in ready-up phase.", ephemeral=True)
+            if uid not in v.fighters_set:
+                return await i.response.send_message("Only fighters can ready up.", ephemeral=True)
+
+            v.ready[uid] = True
+
+            all_ready = all(v.ready.get(u) for u in v.fighters_set)
+            try:
+                await i.response.defer()
+            except:
+                pass
+
+            if all_ready:
+                v.phase = "LIVE"
+
+        await v.update()
+
+        async with v.lock:
+            if v.phase == "LIVE":
+                try:
+                    msg = "Match is LIVE. Good luck."
+                    await v.message.reply(msg, allowed_mentions=discord.AllowedMentions.none())
+                except:
+                    pass
+
+class Unready(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Unready", style=discord.ButtonStyle.secondary)
+
+    async def callback(self, i: discord.Interaction):
+        v = self.view
+        uid = i.user.id
+        async with v.lock:
+            if v.phase != "READY":
+                return await i.response.send_message("Not in ready-up phase.", ephemeral=True)
+            if uid not in v.fighters_set:
+                return await i.response.send_message("Only fighters can unready.", ephemeral=True)
+            v.ready[uid] = False
+            try:
+                await i.response.defer()
+            except:
+                pass
+        await v.update()
 
 class End(discord.ui.Button):
     def __init__(self):
         super().__init__(label="End Match", style=discord.ButtonStyle.danger)
 
     async def callback(self, i: discord.Interaction):
-        if i.user.id not in {self.view.host_id, self.view.middleman_id}:
-            return await i.response.send_message("Not allowed", ephemeral=True)
-        await i.response.edit_message(view=StatsView(self.view))
+        v = self.view
+        async with v.lock:
+            if v.phase in ("STATS", "ENDED"):
+                try:
+                    return await i.response.send_message("Already ending.", ephemeral=True)
+                except:
+                    return
+            if not is_controller(v, i.user.id):
+                return await i.response.send_message("Not allowed", ephemeral=True)
+            v.phase = "STATS"
+            try:
+                await i.response.defer()
+            except:
+                pass
+
+        try:
+            await v.message.edit(view=StatsView(v))
+        except:
+            try:
+                await i.response.edit_message(view=StatsView(v))
+            except:
+                pass
 
 class Cancel(discord.ui.Button):
     def __init__(self):
         super().__init__(label="Cancel", style=discord.ButtonStyle.danger)
 
     async def callback(self, i: discord.Interaction):
-        if i.user.id not in {self.view.host_id, self.view.middleman_id}:
+        v = self.view
+        if not is_controller(v, i.user.id):
             return await i.response.send_message("Not allowed", ephemeral=True)
+
+        async with v.lock:
+            v.phase = "ENDED"
+
         try:
             await i.message.delete()
         except:
@@ -404,15 +558,20 @@ class MMSelect(discord.ui.UserSelect):
         self.v = v
 
     async def callback(self, i: discord.Interaction):
+        v = self.v
         picked = self.values[0].id
         m = i.guild.get_member(picked) or await i.guild.fetch_member(picked)
         if not any(r.id == MIDDLEMAN_ROLE_ID for r in getattr(m, "roles", [])):
             return await i.response.send_message("Invalid middleman", ephemeral=True)
 
-        self.v.middleman_id = m.id
-        self.v.no_middleman = False
+        async with v.lock:
+            if v.phase not in ("LOBBY", "READY"):
+                return await i.response.send_message("Too late to change middleman.", ephemeral=True)
+            v.middleman_id = m.id
+            v.no_middleman = False
+
         await i.response.send_message("Middleman set", ephemeral=True)
-        await self.v.update()
+        await v.update()
 
 class MMView(discord.ui.View):
     def __init__(self, v):
@@ -429,7 +588,8 @@ class StatsModal(discord.ui.Modal, title="Enter Stats"):
         self.uid = uid
 
     async def on_submit(self, i: discord.Interaction):
-        if i.user.id not in {self.v.host_id, self.v.middleman_id}:
+        v = self.v
+        if not is_controller(v, i.user.id):
             return await i.response.send_message("Not allowed", ephemeral=True)
 
         try:
@@ -443,7 +603,11 @@ class StatsModal(discord.ui.Modal, title="Enter Stats"):
         if dth < 0:
             dth = 0
 
-        self.v.stats[self.uid] = (k, dth)
+        async with v.lock:
+            if v.phase != "STATS":
+                return await i.response.send_message("Not accepting stats right now.", ephemeral=True)
+            self.v.stats[self.uid] = (k, dth)
+
         await i.response.send_message("Saved", ephemeral=True)
 
 class PlayerPick(discord.ui.Select):
@@ -453,9 +617,9 @@ class PlayerPick(discord.ui.Select):
         seen = set()
 
         ids = []
-        for uid in v.team_a:
+        for uid in v.team_a[: v.size]:
             ids.append(uid)
-        for uid in v.team_b:
+        for uid in v.team_b[: v.size]:
             ids.append(uid)
 
         for uid in ids:
@@ -472,17 +636,17 @@ class PlayerPick(discord.ui.Select):
         super().__init__(min_values=1, max_values=1, placeholder="Select war player", options=opts[:25])
 
     async def callback(self, i: discord.Interaction):
-        if i.user.id not in {self.v.host_id, self.v.middleman_id}:
+        v = self.v
+        if not is_controller(v, i.user.id):
             return await i.response.send_message("Not allowed", ephemeral=True)
-
         if self.values[0] == "0":
             return await i.response.send_message("No players in match", ephemeral=True)
 
         uid = int(self.values[0])
-        if uid not in self.v.team_a and uid not in self.v.team_b:
+        if uid not in v.fighters_set:
             return await i.response.send_message("Player not in match", ephemeral=True)
 
-        await i.response.send_modal(StatsModal(self.v, uid))
+        await i.response.send_modal(StatsModal(v, uid))
 
 class Finalize(discord.ui.Button):
     def __init__(self):
@@ -490,8 +654,13 @@ class Finalize(discord.ui.Button):
 
     async def callback(self, i: discord.Interaction):
         v = self.view.v
-        if i.user.id not in {v.host_id, v.middleman_id}:
+        if not is_controller(v, i.user.id):
             return await i.response.send_message("Not allowed", ephemeral=True)
+
+        async with v.lock:
+            if v.phase != "STATS":
+                return await i.response.send_message("Not in stats phase.", ephemeral=True)
+            v.phase = "ENDED"
 
         img = await render_results(v)
         buf = BytesIO()
@@ -501,7 +670,14 @@ class Finalize(discord.ui.Button):
         file = discord.File(buf, "results.png")
         e = discord.Embed()
         e.set_image(url="attachment://results.png")
-        await i.response.edit_message(embed=e, attachments=[file], view=None)
+
+        try:
+            await i.response.edit_message(embed=e, attachments=[file], view=None)
+        except:
+            try:
+                await i.message.edit(embed=e, attachments=[file], view=None)
+            except:
+                pass
 
 class StatsView(discord.ui.View):
     def __init__(self, v):
@@ -522,7 +698,7 @@ class WagerView(discord.ui.View):
         self.middleman_id = None
         self.no_middleman = False
 
-        self.size = size
+        self.size = max(1, int(size))
         self.a = a
         self.b = b
         self.prize = prize
@@ -531,14 +707,70 @@ class WagerView(discord.ui.View):
         self.team_b: list[int] = []
         self.stats: dict[int, tuple[int, int]] = {}
 
-        self.message: discord.Message | None = None
+        self.ready: dict[int, bool] = {}
+        self.fighters_set: set[int] = set()
 
-        self.add_item(Join(f"Join {SAFE_TEAM(a, 'TEAM A')}", "A"))
-        self.add_item(Join(f"Join {SAFE_TEAM(b, 'TEAM B')}", "B"))
-        self.add_item(PickMM())
-        self.add_item(NoMM())
-        self.add_item(End())
-        self.add_item(Cancel())
+        self.phase = "LOBBY"
+
+        self.message: discord.Message | None = None
+        self.lock = asyncio.Lock()
+
+        self.btn_join_a = Join(f"Join {SAFE_TEAM(a, 'TEAM A')}", "A")
+        self.btn_join_b = Join(f"Join {SAFE_TEAM(b, 'TEAM B')}", "B")
+        self.btn_pick_mm = PickMM()
+        self.btn_no_mm = NoMM()
+        self.btn_ready = ReadyUp()
+        self.btn_unready = Unready()
+        self.btn_end = End()
+        self.btn_cancel = Cancel()
+
+        self._rebuild_items()
+
+    def _rebuild_items(self):
+        self.clear_items()
+
+        if self.phase == "LOBBY":
+            self.add_item(self.btn_join_a)
+            self.add_item(self.btn_join_b)
+            self.add_item(self.btn_pick_mm)
+            self.add_item(self.btn_no_mm)
+            self.add_item(self.btn_end)
+            self.add_item(self.btn_cancel)
+            return
+
+        if self.phase == "READY":
+            self.add_item(self.btn_ready)
+            self.add_item(self.btn_unready)
+            self.add_item(self.btn_pick_mm)
+            self.add_item(self.btn_no_mm)
+            self.add_item(self.btn_end)
+            self.add_item(self.btn_cancel)
+            return
+
+        if self.phase == "LIVE":
+            self.add_item(self.btn_end)
+            self.add_item(self.btn_cancel)
+            return
+
+        if self.phase == "STATS":
+            return
+
+        if self.phase == "ENDED":
+            return
+
+    def _cleanup_ready(self):
+        fighters = set(self.team_a[: self.size] + self.team_b[: self.size])
+        kill = [u for u in list(self.ready.keys()) if u not in fighters]
+        for u in kill:
+            self.ready.pop(u, None)
+        self.fighters_set = fighters
+
+    def _init_ready(self):
+        self._cleanup_ready()
+        for u in self.fighters_set:
+            if u not in self.ready:
+                self.ready[u] = False
+        self._rebuild_items()
 
     @property
     def middleman_name(self):
@@ -547,22 +779,54 @@ class WagerView(discord.ui.View):
         m = self.guild.get_member(self.middleman_id)
         return m.display_name if m else None
 
-    async def update(self):
-        if not self.message:
+    async def ping_fighters_ready(self, i: discord.Interaction):
+        async with self.lock:
+            if not self.message:
+                return
+            if self.phase != "READY":
+                return
+            fighters = list(self.fighters_set)
+        if not fighters:
             return
-        img = await render_wager(self)
-        buf = BytesIO()
-        img.save(buf, "PNG")
-        buf.seek(0)
-        file = discord.File(buf, "wager.png")
-        e = discord.Embed()
-        e.set_image(url="attachment://wager.png")
-        await self.message.edit(embed=e, attachments=[file], view=self)
+        mentions = " ".join(f"<@{u}>" for u in fighters)
+        try:
+            await self.message.reply(
+                f"{mentions}\nTeams are full. Ready up to start.",
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
+        except:
+            pass
+
+    async def update(self):
+        async with self.lock:
+            if not self.message:
+                return
+            self._cleanup_ready()
+            full = (len(self.team_a) >= self.size and len(self.team_b) >= self.size)
+            if self.phase == "LOBBY" and full:
+                self.phase = "READY"
+                self._init_ready()
+
+            self._rebuild_items()
+
+            img = await render_wager(self)
+            buf = BytesIO()
+            img.save(buf, "PNG")
+            buf.seek(0)
+            file = discord.File(buf, "wager.png")
+            e = discord.Embed()
+            e.set_image(url="attachment://wager.png")
+
+            try:
+                await self.message.edit(embed=e, attachments=[file], view=self)
+            except:
+                try:
+                    await self.message.edit(embed=e, view=self)
+                except:
+                    pass
 
 @bot.tree.command(name="wager", guild=discord.Object(id=GUILD_ID))
-@app_commands.default_permissions()
-
-
+@app_commands.describe(size="Team size (1 = 1v1, 2 = 2v2, etc)", team_a="Team A name", team_b="Team B name", prize="Prize text")
 async def wager(i: discord.Interaction, size: int, team_a: str, team_b: str, prize: str):
     v = WagerView(i, size, team_a, team_b, prize)
     img = await render_wager(v)
