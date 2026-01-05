@@ -864,38 +864,35 @@ class WagerView(discord.ui.View):
             pass
 
     async def update_state_and_card(self):
-        async with self.lock:
-            fighters = self.fighters_set
-            self.ready_mgr.init_for(fighters)
+    ping = False
+    async with self.lock:
+        fighters = self.fighters_set
+        self.ready_mgr.init_for(fighters)
 
-            if self.phase in ("LOBBY", "WAIT_MM"):
-                if self.teams.is_full():
-                    if not self.mm.decided():
-                        self.state.set_phase("WAIT_MM")
-                    else:
-                        self.mm.lock()
-                        self.state.set_phase("READY")
-                        if not self.state.pinged_ready:
-                            self.state.pinged_ready = True
-                            ping = True
-                        else:
-                            ping = False
+        if self.phase in ("LOBBY", "WAIT_MM"):
+            if self.teams.is_full():
+                if not self.mm.decided():
+                    self.state.set_phase("WAIT_MM")
                 else:
-                    self.state.set_phase("LOBBY")
-                    ping = False
-                    self.state.pinged_ready = False
-            elif self.phase == "READY":
-                if self.ready_mgr.all_ready(fighters):
-                    self.state.set_phase("LIVE")
-                ping = False
+                    self.mm.lock()
+                    self.state.set_phase("READY")
+                    if not self.state.pinged_ready:
+                        self.state.pinged_ready = True
+                        ping = True
             else:
-                ping = False
+                self.state.set_phase("LOBBY")
+                self.state.pinged_ready = False
 
-            self._rebuild_items()
+        elif self.phase == "READY":
+            if self.ready_mgr.all_ready(fighters):
+                self.state.set_phase("LIVE")
 
-        await self._edit_card()
-        if ping:
-            await self._ping_fighters_ready()
+        self._rebuild_items()
+
+    await self._edit_card()
+    if ping:
+        await self._ping_fighters_ready()
+
 
     async def hard_end_to_stats(self):
         async with self.lock:
