@@ -397,11 +397,14 @@ async def post_match_logs(
 
     view = PrizeConfirmView(winner_id) if winner_id else None
 
-    await channel.send(
-        embed=embed,
-        file=results_image,
-        view=view
-    )
+    try:
+        await channel.send(
+            embed=embed,
+            file=results_image,
+            view=view
+        )
+    except Exception:
+        pass
 
 
 async def render_wager_image(v) -> Image.Image:
@@ -1038,6 +1041,7 @@ class FinalizeButton(discord.ui.Button):
         v = self.view.v
         if not is_controller(v, i.user.id):
             return await i.response.send_message("Not allowed", ephemeral=True)
+        await i.response.defer()
         await v.finalize_results(i)
 
 
@@ -1334,6 +1338,14 @@ class WagerView(discord.ui.View):
                 await interaction.message.edit(embed=e, attachments=[results_file], view=None)
             except:
                 pass
+
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("Match finalized.", ephemeral=True)
+            else:
+                await interaction.response.send_message("Match finalized.", ephemeral=True)
+        except:
+            pass
 
         asyncio.create_task(self._cleanup_lobby_after(20))
 
