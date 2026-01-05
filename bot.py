@@ -865,6 +865,7 @@ class WagerView(discord.ui.View):
 
     async def update_state_and_card(self):
     ping = False
+
     async with self.lock:
         fighters = self.fighters_set
         self.ready_mgr.init_for(fighters)
@@ -890,8 +891,10 @@ class WagerView(discord.ui.View):
         self._rebuild_items()
 
     await self._edit_card()
+
     if ping:
         await self._ping_fighters_ready()
+
 
 
     async def hard_end_to_stats(self):
