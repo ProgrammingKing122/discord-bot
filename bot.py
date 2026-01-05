@@ -931,22 +931,15 @@ class WagerView(discord.ui.View):
 
         log_ch = self.guild.get_channel(LOG_CHANNEL_ID)
         if log_ch:
-            mm_name = "None"
-            if self.no_middleman:
-                mm_name = "None"
-            elif self.middleman_id:
-                mm = self.guild.get_member(self.middleman_id)
-                mm_name = mm.display_name if mm else "Unknown"
             try:
-                await log_ch.send(
-                    f"**WAGER COMPLETED**\n"
-                    f"Host: {self.host}\n"
-                    f"Teams: {self.a} vs {self.b}\n"
-                    f"Size: {self.size}v{self.size}\n"
-                    f"Prize: {self.prize}\n"
-                    f"Score: {ta_k} - {tb_k}\n"
-                    f"Middleman: {mm_name}"
-                )
+                log_img = await render_results_image(self)
+                log_buf = BytesIO()
+                log_img.save(log_buf, "PNG")
+                log_buf.seek(0)
+                log_file = discord.File(log_buf, "wager_result.png")
+                log_embed = discord.Embed(title="WAGER COMPLETED")
+                log_embed.set_image(url="attachment://wager_result.png")
+                await log_ch.send(embed=log_embed, file=log_file)
             except:
                 pass
 
