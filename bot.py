@@ -1331,13 +1331,7 @@ class WagerView(discord.ui.View):
         e = discord.Embed()
         e.set_image(url="attachment://results.png")
 
-        try:
-            await interaction.response.edit_message(embed=e, attachments=[results_file], view=None)
-        except:
-            try:
-                await interaction.message.edit(embed=e, attachments=[results_file], view=None)
-            except:
-                pass
+        
 
         try:
             if interaction.response.is_done():
@@ -1417,3 +1411,13 @@ _BIG_BODY_PAD = """
 
 
 bot.run(TOKEN)
+
+        try:
+            await interaction.followup.send(embed=e, file=results_file)
+        except:
+            pass
+        try:
+            if self.message:
+                await self.message.delete()
+        except:
+            pass
