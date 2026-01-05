@@ -323,15 +323,18 @@ class PrizeConfirmView(discord.ui.View):
         super().__init__(timeout=None)
         self.winner_id = winner_id
         self.confirmed = False
+        btn = discord.ui.Button(label="Prize Received", style=discord.ButtonStyle.success)
+        btn.callback = self._confirm
+        self.add_item(btn)
 
-    @discord.ui.Button(label="Prize Received", style=discord.ButtonStyle.success)
-    async def confirm(self, i: discord.Interaction, _):
+    async def _confirm(self, i: discord.Interaction):
         if i.user.id != self.winner_id:
             return await i.response.send_message("Winner only", ephemeral=True)
         if self.confirmed:
             return await i.response.send_message("Already confirmed", ephemeral=True)
         self.confirmed = True
         await i.response.edit_message(content="✅ Prize confirmed as received.", view=None)
+
 
 
 async def post_match_logs(
