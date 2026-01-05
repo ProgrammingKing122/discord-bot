@@ -15,6 +15,7 @@ from discord.ext import commands
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = 1443765937793667194
 MIDDLEMAN_ROLE_ID = 1457241934832861255
+LOG_CHANNEL_ID = 1457242121009631312
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE, "fonts", "Inter_24pt-ExtraBoldItalic.ttf")
@@ -927,6 +928,27 @@ class WagerView(discord.ui.View):
             RANKED.record_match(u, k, dth, out_b)
 
         RANKED.save()
+
+        log_ch = self.guild.get_channel(LOG_CHANNEL_ID)
+        if log_ch:
+            mm_name = "None"
+            if self.no_middleman:
+                mm_name = "None"
+            elif self.middleman_id:
+                mm = self.guild.get_member(self.middleman_id)
+                mm_name = mm.display_name if mm else "Unknown"
+            try:
+                await log_ch.send(
+                    f"**WAGER COMPLETED**\n"
+                    f"Host: {self.host}\n"
+                    f"Teams: {self.a} vs {self.b}\n"
+                    f"Size: {self.size}v{self.size}\n"
+                    f"Prize: {self.prize}\n"
+                    f"Score: {ta_k} - {tb_k}\n"
+                    f"Middleman: {mm_name}"
+                )
+            except:
+                pass
 
         img = await render_results_image(self)
         buf = BytesIO()
