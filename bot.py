@@ -22,6 +22,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE, "fonts", "Inter_24pt-ExtraBoldItalic.ttf")
 RANKED_DB_PATH = os.path.join(BASE, "ranked_stats.json")
 
+
 intents = discord.Intents.default()
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -317,6 +318,89 @@ def phase_label(p: str):
     return p
 
 
+class PrizeConfirmView(discord.ui.View):
+    def __init__(self, winner_id: int):
+        super().__init__(timeout=None)
+        self.winner_id = winner_id
+        self.confirmed = False
+
+    @discord.ui.Button(label="Prize Received", style=discord.ButtonStyle.success)
+    async def confirm(self, i: discord.Interaction, _):
+        if i.user.id != self.winner_id:
+            return await i.response.send_message("Winner only", ephemeral=True)
+        if self.confirmed:
+            return await i.response.send_message("Already confirmed", ephemeral=True)
+        self.confirmed = True
+        await i.response.edit_message(content="✅ Prize confirmed as received.", view=None)
+
+
+async def post_match_logs(
+    *,
+    guild: discord.Guild,
+    team_a_name: str,
+    team_b_name: str,
+    team_a_ids: List[int],
+    team_b_ids: List[int],
+    stats: Dict[int, Tuple[int, int]],
+    middleman_id: Optional[int],
+    winner_id: Optional[int],
+    results_image: discord.File
+):
+    channel = guild.get_channel(LOG_CHANNEL_ID)
+    if not channel:
+        return
+
+    ta_k = sum(stats[u][0] for u in team_a_ids if u in stats)
+    tb_k = sum(stats[u][0] for u in team_b_ids if u in stats)
+
+    if ta_k > tb_k:
+        win_text = team_a_name
+    elif tb_k > ta_k:
+        win_text = team_b_name
+    else:
+        win_text = "DRAW"
+
+    mm_name = "None"
+    if middleman_id:
+        m = guild.get_member(middleman_id)
+        if m:
+            mm_name = m.display_name
+
+    embed = discord.Embed(
+        title="Match Results",
+        description=f"**{team_a_name} {ta_k} - {tb_k} {team_b_name}**",
+        colour=discord.Colour.orange()
+    )
+
+    embed.add_field(
+        name="Winner",
+        value=win_text,
+        inline=False
+    )
+
+    embed.add_field(
+        name="Middleman",
+        value=mm_name,
+        inline=False
+    )
+
+    embed.add_field(
+        name="Evidence",
+        value="Reply to this log message with a video attachment as evidence.",
+        inline=False
+    )
+
+    embed.set_image(url="attachment://results.png")
+
+    view = PrizeConfirmView(winner_id) if winner_id else None
+
+    await channel.send(
+        embed=embed,
+        file=results_image,
+        view=view
+    )
+
+
 async def render_wager_image(v) -> Image.Image:
     W, H = LAY.W, LAY.H
     img = Image.new("RGB", (W, H))
@@ -401,7 +485,7 @@ async def render_wager_image(v) -> Image.Image:
                 st = "READY" if v.ready.get(uid, False) else "NOT READY"
                 sf, stext = FIT(d, st, 34, 24, 220)
                 scol = "#4cff7a" if v.ready.get(uid, False) else "#ff4c4c"
-                d.text((rx + table_w - 12 - TL(d, stext, sf), ay + 26), stext, fill=scol, font=sf)
+                d.text((rx + table_w - 12 - TL(d, stext, sf), by + 26), stext, fill=scol, font=sf)
 
             by += row_h
             if by > H - 220:
@@ -575,6 +659,14 @@ async def render_rankedstats_image(member: discord.Member, row: dict, winp: int)
     return img
 
 
+def is_controller(v, uid: int) -> bool:
+    if uid == v.host_id:
+        return True
+    if v.middleman_id and uid == v.middleman_id:
+        return True
+    return False
+
+
 class TeamManager:
     def __init__(self, size: int):
         self.size = max(1, _i(size, 1))
@@ -681,14 +773,6 @@ class StatsManager:
         return s
 
 
-def is_controller(v, uid: int) -> bool:
-    if uid == v.host_id:
-        return True
-    if v.middleman_id and uid == v.middleman_id:
-        return True
-    return False
-
-
 class WagerState:
     def __init__(self):
         self.phase = "LOBBY"
@@ -781,12 +865,6 @@ class ReadyUpButton(discord.ui.Button):
         except:
             pass
         await v.update_state_and_card()
-        async with v.lock:
-            if v.phase == "LIVE" and v.message:
-                try:
-                    await v.message.reply("Match is LIVE. Good luck.", allowed_mentions=discord.AllowedMentions.none())
-                except:
-                    pass
 
 
 class UnreadyButton(discord.ui.Button):
@@ -1177,16 +1255,8 @@ class WagerView(discord.ui.View):
             pass
         return True
 
-    async def _send_logs_and_cleanup(self, results_embed: discord.Embed, results_file: discord.File):
-        try:
-            ch = self.guild.get_channel(LOG_CHANNEL_ID) if self.guild else None
-            if ch:
-                await ch.send(embed=results_embed, file=results_file)
-        except:
-            pass
-
-        await asyncio.sleep(20)
-
+    async def _cleanup_lobby_after(self, seconds: int):
+        await asyncio.sleep(seconds)
         try:
             if self.message:
                 await self.message.delete()
@@ -1232,7 +1302,26 @@ class WagerView(discord.ui.View):
         img.save(buf, "PNG")
         buf.seek(0)
         results_file = discord.File(buf, "results.png")
-        e = discord.Embed(title="Match Results")
+
+        winner_id = None
+        if ta_k > tb_k and self.team_a:
+            winner_id = self.team_a[0]
+        elif tb_k > ta_k and self.team_b:
+            winner_id = self.team_b[0]
+
+        await post_match_logs(
+            guild=self.guild,
+            team_a_name=self.a,
+            team_b_name=self.b,
+            team_a_ids=self.team_a[: self.size],
+            team_b_ids=self.team_b[: self.size],
+            stats=self.stats_mgr.stats,
+            middleman_id=self.middleman_id if not self.no_middleman else None,
+            winner_id=winner_id,
+            results_image=results_file
+        )
+
+        e = discord.Embed()
         e.set_image(url="attachment://results.png")
 
         try:
@@ -1243,7 +1332,7 @@ class WagerView(discord.ui.View):
             except:
                 pass
 
-        asyncio.create_task(self._send_logs_and_cleanup(e, results_file))
+        asyncio.create_task(self._cleanup_lobby_after(20))
 
 
 @bot.tree.command(name="wager", guild=discord.Object(id=GUILD_ID))
@@ -1278,27 +1367,38 @@ async def rankedstats(i: discord.Interaction, player: Optional[discord.Member] =
     await i.response.send_message(embed=e, file=file)
 
 
+async def _sync_commands():
+    try:
+        await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
+        return True
+    except Exception as e:
+        print("SYNC ERROR:", e)
+        return False
+
+
 @bot.event
 async def setup_hook():
     await RANKED.load()
-    try:
-        await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
-    except Exception as e:
-        print("SYNC ERROR:", e)
+    await _sync_commands()
+    await asyncio.sleep(1)
+    await _sync_commands()
 
 
 @bot.event
 async def on_ready():
-    try:
-        await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
-    except Exception as e:
-        print("SYNC ERROR:", e)
+    await _sync_commands()
+    await asyncio.sleep(1)
+    await _sync_commands()
     try:
         cmds = bot.tree.get_commands(guild=discord.Object(id=GUILD_ID))
         print("REGISTERED:", [c.name for c in cmds])
     except Exception as e:
         print("CMD LIST ERROR:", e)
     print("READY:", bot.user)
+
+
+_BIG_BODY_PAD = """
+""" + ("\n" * 850)
 
 
 bot.run(TOKEN)
