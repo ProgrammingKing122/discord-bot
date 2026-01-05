@@ -3,6 +3,7 @@ import math
 import discord
 import aiohttp
 from io import BytesIO
+from discord import app_commands
 from PIL import Image, ImageDraw, ImageFont
 from discord.ext import commands
 
@@ -557,11 +558,9 @@ class WagerView(discord.ui.View):
         e.set_image(url="attachment://wager.png")
         await self.message.edit(embed=e, attachments=[file], view=self)
 
-@bot.tree.command(
-    name="wager",
-    guild=discord.Object(id=GUILD_ID),
-    default_permissions=None
-)
+@bot.tree.command(name="wager", guild=discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+
 
 async def wager(i: discord.Interaction, size: int, team_a: str, team_b: str, prize: str):
     v = WagerView(i, size, team_a, team_b, prize)
