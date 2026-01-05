@@ -1260,7 +1260,7 @@ class WagerView(discord.ui.View):
         await asyncio.sleep(seconds)
 
     async def finalize_results(self, interaction: discord.Interaction):
-                async with self.lock:
+        async with self.lock:
             if self.state.ending:
                 return
             if self.phase != "STATS":
